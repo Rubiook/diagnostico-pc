@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+#  Salidas que genera la aplicacion (informes y pruebas): no van al repo
+# ---------------------------------------------------------------------------
+InformePC_*/
+ReportePC_*/
+MonitorPC_*/
+Prueba_*/
+Informe_*.txt
+Informe_*.html
+bateria.html
+monitor_picos.csv
+muestreo_cpu.csv
+monitor.csv
+reporte.txt
+
+# Paquetes y temporales de trabajo
+dist/
+*.zip
+*.log
+_*

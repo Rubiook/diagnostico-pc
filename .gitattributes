@@ -1,0 +1,3 @@
+# Este proyecto son scripts de Windows (PowerShell + .bat): queremos que git
+# guarde los archivos byte a byte, sin tocar los finales de linea.
+* -text

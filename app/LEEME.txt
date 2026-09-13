@@ -1,0 +1,118 @@
+========================================================================
+ INFORME DE PC - aplicacion de diagnostico de hardware y software
+========================================================================
+
+QUE ES
+  Una aplicacion con interfaz grafica (hecha en PowerShell: no se instala
+  nada, no necesita .NET extra) con UN SOLO BOTON: corre las 11 pruebas,
+  muestra el estado de cada componente en un TABLERO VISUAL con colores
+  (verde = bien, amarillo = para tener en cuenta, rojo = hay que revisarlo)
+  y genera un INFORME COMPLETO en HTML y TXT con todo el detalle.
+
+  IMPORTANTE: no modifica nada del equipo. Solo lee informacion. Lo unico
+  que escribe es la carpeta de reportes.
+
+QUE GENERA (en el Escritorio, carpeta InformePC_<equipo>_<fecha>)
+  Informe_<equipo>.html     -> informe completo, se abre en el navegador
+  Informe_<equipo>.txt      -> el mismo informe en texto plano
+  muestreo_cpu.csv          -> muestra de CPU segundo a segundo
+  monitor_picos.csv         -> registro del monitor + tus marcas de ventilador
+  bateria.html              -> opcional (informe de bateria de Windows)
+
+LAS 11 PRUEBAS
+  1. Identificacion: equipo, modelo, BIOS, Windows, uptime, firmware
+  2. Hardware: CPU, modulos de RAM (detecta single channel), GPU y driver,
+     discos, volumenes, salud SMART, bateria
+  3. Rendimiento: top 20 procesos por CPU, top 10 por RAM, carga por nucleo
+  4. Muestreo de CPU de 45 s (configurable) con los picos mas altos
+  5. Procesos sospechosos: sin firma digital valida, en AppData/Temp,
+     conexiones de red activas con su proceso
+  6. Arranque automatico: Administrador de tareas, claves Run/RunOnce,
+     carpetas de Inicio, tareas programadas no-Microsoft, servicios
+  7. Seguridad: Defender (estado, exclusiones, amenazas), firewall,
+     RDP/WinRM, cuentas y administradores, Winlogon/AppInit, hosts, DNS
+  8. Drivers: dispositivos sin controlador o con error (los mismos que aparecen
+     en el Administrador de dispositivos), los controladores mas antiguos, los
+     que Windows Update tiene para instalar, rastros de Driver Booster/IObit,
+     archivos .sys modificados en 90 dias, programas instalados y hotfixes
+  9. Eventos: errores agrupados, tiempo de arranque (Id 100) y culpables
+     (Id 101), apagados inesperados, errores de disco, WHEA, limitacion
+     termica del CPU
+ 10. Energia: plan, limites del procesador y boost, inicio rapido,
+     temperaturas ACPI
+ 11. Prueba de velocidad del disco (escribe y borra 256 MB)
+
+TABLERO DE ESTADO (lo que ves al terminar)
+  Una tarjeta por componente, con un indicador de color a la izquierda:
+     verde   (OK)        todo normal
+     naranja (ATENCION)  no es una falla, pero conviene mirarlo
+     rojo    (REVISAR)   hay algo que deberias revisar
+  Tarjetas incluidas: equipo y Windows, procesador, memoria RAM (detecta si
+  falta un modulo / single channel), graficos y driver, almacenamiento y
+  espacio libre, velocidad del disco, Windows Update, seguridad (Defender,
+  exclusiones, amenazas), programas de arranque, procesos sin firma valida,
+  picos de CPU, energia y temperatura, estabilidad (errores y apagados),
+  tiempo de arranque de Windows y controladores.
+  La tarjeta "Windows Update" dice cuantas actualizaciones hay pendientes y
+  cuantas son de controladores; la tarjeta "Controladores (drivers)" dice si
+  hay dispositivos sin driver o con error y si hay drivers para actualizar.
+  Arriba, un cartel resume el resultado global y cuantos puntos hay que
+  revisar. Abajo, los botones para guardar o copiar el informe.
+
+GUARDAR EL ANALISIS COMPLETO
+  Boton "Guardar informe completo...": elegis una carpeta (por ejemplo un
+  pendrive) y copia ahi los 4 archivos del analisis (HTML, TXT y los CSV).
+  "Abrir informe (HTML)": abre el informe completo en el navegador.
+  "Copiar resumen": vuelve a copiar el resumen al portapapeles.
+
+COMO USARLA
+  1) Copia la carpeta InformePC completa a la laptop (USB, OneDrive, etc.)
+  2) Si Windows la bloquea por venir de internet, desbloqueala una vez:
+        Get-ChildItem "ruta\InformePC" -Recurse | Unblock-File
+  3) Elegi una de las dos formas:
+
+     a) CON VENTANA (recomendado)
+        Doble clic en  Ejecutar_Informe_PC.bat
+        (pide permisos de Administrador: los necesita para leer el registro
+         de arranque, las exclusiones de Defender y los eventos)
+
+     b) SIN VENTANA (modo consola, deja el resumen en pantalla)
+        Doble clic en  Informe_Consola.bat
+        o a mano:
+          powershell -NoProfile -ExecutionPolicy Bypass -File INFORME_PC.ps1 -Auto
+
+  4) Apreta el boton grande "ANALIZAR ESTE EQUIPO" y espera 2 a 4 minutos.
+     El progreso se ve prueba por prueba en la misma ventana.
+  5) Al terminar aparece el TABLERO con una tarjeta por componente.
+       - el RESUMEN queda COPIADO AL PORTAPAPELES: pegalo en el chat
+       - "Guardar informe completo...": copia HTML + TXT + CSV a una carpeta
+         (ideal para llevarlos en un pendrive)
+       - si hay algo en rojo o amarillo, mandame el informe para revisarlo
+       - para saber si hay DRIVERS para actualizar, tilda antes de analizar la
+         casilla de Windows Update en "Opciones avanzadas" (es lo unico que
+         usa internet; el resto de la revision de drivers se hace sin conexion)
+
+OPCIONES AVANZADAS (modo consola)
+  -MuestreoSegundos 120        muestreo de CPU mas largo
+  -TestDisco                   fuerza la prueba de velocidad (por defecto la
+                               GUI la incluye si esta tildada)
+  -ActualizacionesPendientes   consulta Windows Update (1 a 3 min extra):
+                               actualizaciones de Windows + drivers
+  -DriversPendientes           lo mismo pero para revisar solo los drivers
+  -MonitorSegundos 600         monitorea 10 minutos y graba monitor_picos.csv
+  -MonitorUmbral 15            % de CPU para considerar "pico" (por defecto 20)
+  -OutDir "C:\Temp\rep"        cambia la carpeta de salida
+  -Auto                        sin interfaz grafica
+  -NoElevar                    no pedir elevacion (para pruebas)
+
+PRIVACIDAD
+  El informe se guarda solo en tu equipo. Nada se envia a internet por si
+  solo. El contenido puede incluir nombres de usuario, rutas y nombres de
+  equipos de tu red: revisalo antes de compartirlo publicamente.
+
+REQUISITOS
+  Windows 10 u 11 (cualquier edicion). PowerShell 5.1, que ya viene en
+  Windows. No requiere conexion a internet: la revision de dispositivos sin
+  controlador, controladores viejos y errores de hardware se hace sin red.
+  Solo la casilla de Windows Update (actualizaciones y drivers nuevos) usa
+  internet, y es opcional.
