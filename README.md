@@ -118,6 +118,14 @@ Esta parte funciona **sin internet** y sin modificar nada:
 
 Y si tildás la casilla **Consultar Windows Update** (o usás `-DriversPendientes`), además consulta
 Windows Update y te dice **qué controladores hay para actualizar**, con modelo, fabricante y fecha.
+
+Al final de la revisión la app da un **veredicto claro** en el tablero, en el informe y en el plan de
+acciones:
+
+- `CONTROLADORES Y ACTUALIZACIONES: TODO AL DIA - no hay ningun controlador para actualizar`, con la
+  lista de lo que revisó (0 dispositivos con error, 0 de otro equipo, 0 pendientes en Windows Update);
+- o `HAY COSAS PARA ACTUALIZAR`, indicando exactamente qué.
+
 El informe incluye una guía de **cómo actualizarlos en orden** (y por qué **no** conviene usar
 "actualizadores" tipo Driver Booster / IObit).
 

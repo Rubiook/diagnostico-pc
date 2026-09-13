@@ -57,6 +57,12 @@ TABLERO DE ESTADO (lo que ves al terminar)
   exclusiones, amenazas), programas de arranque, procesos sin firma valida,
   picos de CPU, energia y temperatura, estabilidad (errores y apagados),
   tiempo de arranque de Windows y controladores.
+  Abajo de las tarjetas aparece el resumen CONTROLADORES Y ACTUALIZACIONES con
+  el veredicto claro: "TODO AL DIA - no hay ningun controlador para actualizar"
+  o "HAY COSAS PARA ACTUALIZAR", junto con la lista de lo que se reviso
+  (dispositivos con error, drivers de otro equipo, drivers de Windows Update).
+  Si dice SIN PROBLEMAS (Windows Update no consultado) es porque no tildaste
+  la casilla: tildala y volve a analizar para confirmarlo del todo.
   La tarjeta "Windows Update" dice cuantas actualizaciones hay pendientes y
   cuantas son de controladores; la tarjeta "Controladores (drivers)" dice si
   hay dispositivos sin driver o con error y si hay drivers para actualizar.

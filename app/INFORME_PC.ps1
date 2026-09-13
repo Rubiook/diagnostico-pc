@@ -84,6 +84,8 @@ $global:DrvPendientes = @()
 $global:DrvConsultado = $false
 $global:UpdSoftware   = 0
 $global:DrvAtipicos   = @()
+$global:CheckDrivers  = New-Object System.Collections.ArrayList
+$global:VeredictoDrivers = ''
 $global:LogAcciones   = New-Object System.Collections.ArrayList
 $global:PlanRuta      = ''
 
@@ -663,6 +665,42 @@ function Analizar-Drivers {
         [void]$o.Add('  en Opciones avanzadas, o ejecuta el script con -DriversPendientes, para saber si este')
         [void]$o.Add('  equipo tiene controladores nuevos disponibles.')
     }
+    # --- C2) VEREDICTO: hay algo para actualizar o esta todo al dia? ---
+    $nProb = @($global:DrvProblemas).Count
+    $nAtip = @($global:DrvAtipicos).Count
+    $nViej = @($global:DrvViejos).Count
+    $nPend = @($global:DrvPendientes).Count
+    $global:CheckDrivers = New-Object System.Collections.ArrayList
+    [void]$global:CheckDrivers.Add(('Equipo: ' + ('' + (Seg { (Get-CimInstance Win32_ComputerSystem).Manufacturer }) + ' ' + (Seg { (Get-CimInstance Win32_ComputerSystem).Model }))))
+    [void]$global:CheckDrivers.Add(('Revisado el ' + (Get-Date -Format 'yyyy-MM-dd HH:mm') + '   |   controladores que ve Windows: ' + $global:DrvTotal))
+    if ($nProb -eq 0) { [void]$global:CheckDrivers.Add('[ok] 0 dispositivos sin controlador o con error') }
+    else { [void]$global:CheckDrivers.Add(('[!!] ' + $nProb + ' dispositivo(s) sin controlador o con error: hay que instalarlo')) }
+    if ($nAtip -eq 0) { [void]$global:CheckDrivers.Add('[ok] 0 controladores de otro equipo (Surface, Dell, HP...)') }
+    else { [void]$global:CheckDrivers.Add(('[!!] ' + $nAtip + ' controlador(es) de otro equipo: conviene quitarlos')) }
+    if ($global:DrvConsultado) {
+        if ($nPend -eq 0) { [void]$global:CheckDrivers.Add('[ok] 0 controladores para actualizar en Windows Update') }
+        else { [void]$global:CheckDrivers.Add(('[!!] ' + $nPend + ' controlador(es) para actualizar en Windows Update')) }
+        if ([int]$global:UpdSoftware -gt 0) { [void]$global:CheckDrivers.Add(('     ' + $global:UpdSoftware + ' actualizacion(es) de Windows pendientes (no son drivers)')) }
+    } else {
+        [void]$global:CheckDrivers.Add('[--] Windows Update NO se consulto en esta corrida')
+    }
+    if ($nViej -gt 0) { [void]$global:CheckDrivers.Add(('[i ] ' + $nViej + ' controlador(es) con mas de 4 anos: no hace falta tocarlos si el equipo anda bien')) }
+
+    $listo = ($nProb -eq 0 -and $nAtip -eq 0 -and ($nPend -eq 0 -or -not $global:DrvConsultado))
+    if ($listo -and $global:DrvConsultado) {
+        $global:VeredictoDrivers = 'TODO AL DIA - no hay ningun controlador para actualizar'
+    } elseif ($listo) {
+        $global:VeredictoDrivers = 'SIN PROBLEMAS DE CONTROLADORES (Windows Update no consultado: tilda la casilla para confirmarlo del todo)'
+    } else {
+        $global:VeredictoDrivers = 'HAY COSAS PARA ACTUALIZAR - usa el boton "Solucionar / actualizar"'
+    }
+
+    [void]$o.Add('')
+    [void]$o.Add('  --- RESULTADO DEL CHEQUEO DE CONTROLADORES ---')
+    foreach ($l in $global:CheckDrivers) { [void]$o.Add('  ' + $l) }
+    [void]$o.Add('')
+    [void]$o.Add('  ==> ' + $global:VeredictoDrivers)
+
     # --- D) Como actualizarlos bien ---
     [void]$o.Add('')
     [void]$o.Add('  --- COMO ACTUALIZAR LOS CONTROLADORES (en este orden) ---')
@@ -767,6 +805,11 @@ function Nuevo-PlanAcciones {
     [void]$ln.Add(' Que hacer con cada hallazgo del informe. La app solo lee: nada se cambia sin tu permiso.')
     [void]$ln.Add(('=' * 70))
     [void]$ln.Add('')
+    if ($global:VeredictoDrivers) {
+        [void]$ln.Add('--- CONTROLADORES Y ACTUALIZACIONES: ' + $global:VeredictoDrivers + ' ---')
+        foreach ($l in $global:CheckDrivers) { [void]$ln.Add('   ' + $l) }
+        [void]$ln.Add('')
+    }
     $i = 0
     foreach ($x in $global:Hallazgos) {
         if (('' + $x.Estado) -eq 'OK' -and -not $x.Solucion) { continue }
@@ -775,6 +818,11 @@ function Nuevo-PlanAcciones {
         [void]$ln.Add('     QUE PASA  : ' + $x.Valor)
         if ($x.Detalle)  { [void]$ln.Add('     DETALLE   : ' + $x.Detalle) }
         if ($x.Solucion) { [void]$ln.Add('     QUE HACER : ' + $x.Solucion) }
+        [void]$ln.Add('')
+    }
+    $malos = @($global:Hallazgos | Where-Object { ('' + $_.Estado) -ne 'OK' }).Count
+    if ($malos -eq 0) {
+        [void]$ln.Add('>>> NADA QUE ARREGLAR: todos los componentes estan en OK. <<<')
         [void]$ln.Add('')
     }
     [void]$ln.Add('--- LO QUE HIZO LA APP EN ESTA CORRIDA ---')
@@ -1161,8 +1209,12 @@ function Rec-Hallazgos {
         $det += ('   |   ' + (($pend | Select-Object -First 2 | ForEach-Object { $_.Titulo }) -join ' / '))
         $sol = 'Boton "Solucionar / actualizar": la app descarga e instala esos controladores desde Windows Update.'
     } elseif ($global:DrvConsultado) {
-        $val = 'Sin controladores pendientes'
-        $det += '   |   Windows Update no ofrece controladores nuevos'
+        $val = 'TODO AL DIA: nada para actualizar'
+        $det += '   |   0 dispositivos con error, 0 de otro equipo, 0 pendientes en Windows Update'
+        $sol = 'Nada que hacer. Volve a comprobarlo en unos meses o si algo empieza a fallar.'
+    } else {
+        $val = 'Sin problemas de controladores (Windows Update sin consultar)'
+        $det += '   |   0 dispositivos con error y 0 de otro equipo. Tilda la casilla de Windows Update para confirmar drivers nuevos.'
     }
     if ($viej.Count -gt 0) {
         $det += ('   |   ' + $viej.Count + ' con fecha de mas de 4 anos')
@@ -1251,6 +1303,8 @@ function Ejecutar-Diagnostico {
     $global:DrvPendientes = @()
     $global:DrvConsultado = $false
     $global:DrvAtipicos = @()
+    $global:CheckDrivers = New-Object System.Collections.ArrayList
+    $global:VeredictoDrivers = ''
     $global:LogAcciones = New-Object System.Collections.ArrayList
     $global:PlanRuta = ''
     $global:MuestreoMaxCPU = 0
@@ -1292,6 +1346,13 @@ function Ejecutar-Diagnostico {
         [void]$global:Sec[$k].Add(('             ' + $x.Valor))
         if ($x.Detalle) { [void]$global:Sec[$k].Add(('             ' + $x.Detalle)) }
         if ($x.Solucion) { [void]$global:Sec[$k].Add(('      QUE HACER: ' + $x.Solucion)) }
+        [void]$global:Sec[$k].Add('')
+    }
+    if ($global:VeredictoDrivers) {
+        [void]$global:Sec[$k].Add('  ------------------------------------------------------------------------------------------')
+        [void]$global:Sec[$k].Add(('  CONTROLADORES Y ACTUALIZACIONES:  ' + $global:VeredictoDrivers))
+        foreach ($l in $global:CheckDrivers) { [void]$global:Sec[$k].Add(('     ' + $l)) }
+        [void]$global:Sec[$k].Add('  ------------------------------------------------------------------------------------------')
         [void]$global:Sec[$k].Add('')
     }
     [void]$global:Sec[$k].Add(('  RESULTADO GLOBAL: ' + $global:EstadoGlobal + '    (' + $global:NRevisar + ' para revisar, ' + $global:NAtender + ' para atender, ' + $global:Hallazgos.Count + ' componentes analizados)'))
@@ -1667,6 +1728,7 @@ function Mostrar-GUI {
             $lblBannerDetalle.Text = 'Revisa las tarjetas en rojo. Guarda el informe completo y envialo para el analisis detallado.'
         }
         $acc = @($global:DrvPendientes).Count + @($global:DrvAtipicos).Count
+        if ($global:VeredictoDrivers -match 'TODO AL DIA') { $lblBannerDetalle.Text += '   Controladores y actualizaciones: TODO AL DIA.' }
         if ($acc -gt 0) { $lblBannerDetalle.Text += ('   La app puede aplicar ' + $acc + ' solucion(es) automatica(s): boton "Solucionar / actualizar".') }
     }
 
@@ -1774,6 +1836,11 @@ function Mostrar-GUI {
             $l = New-Object System.Collections.ArrayList
             [void]$l.Add('ESTO ES LO QUE SE VA A HACER')
             [void]$l.Add('')
+            if ($na2 -eq 0 -and $np2 -eq 0) {
+                [void]$l.Add('>>> CONTROLADORES Y ACTUALIZACIONES: ' + $global:VeredictoDrivers)
+                [void]$l.Add('    No hay nada para reparar ni instalar en este equipo.')
+                [void]$l.Add('')
+            }
             if ($na2 -eq 0) {
                 [void]$l.Add('[ ] Reparar controladores de OTRO equipo: no se detecto ninguno en este equipo.')
             } elseif ([bool]$script:chkAtipSol.Checked) {
@@ -1984,6 +2051,13 @@ if ($Auto) {
     if ($global:Sec.Contains('0. RESUMEN DE HALLAZGOS')) { foreach ($l in $global:Sec['0. RESUMEN DE HALLAZGOS']) { Write-Host $l } }
     if ($global:Sec.Contains('1. IDENTIFICACION DEL EQUIPO Y DEL SISTEMA')) { foreach ($l in $global:Sec['1. IDENTIFICACION DEL EQUIPO Y DEL SISTEMA']) { Write-Host $l } }
     Write-Host '===========================================================' -ForegroundColor Green
+    if ($global:VeredictoDrivers) {
+        Write-Host ''
+        Write-Host '------ CONTROLADORES Y ACTUALIZACIONES ------' -ForegroundColor Cyan
+        Write-Host ('  ' + $global:VeredictoDrivers) -ForegroundColor Green
+        foreach ($l in $global:CheckDrivers) { Write-Host ('  ' + $l) }
+        Write-Host '---------------------------------------------' -ForegroundColor Cyan
+    }
     Write-Host ('Informe HTML : ' + $global:Htm)
     Write-Host ('Informe TXT  : ' + $global:Txt)
     Write-Host ('CSV de CPU   : ' + (Join-Path $OutDir 'muestreo_cpu.csv'))
