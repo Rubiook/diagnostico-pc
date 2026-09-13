@@ -7,6 +7,8 @@ genera un **informe completo en HTML y TXT**.
 > ⚠️ **No modifica nada del sistema: solo lee.** Lo único que escribe en el disco es la carpeta donde
 > guarda el informe. No instala nada y no necesita .NET extra.
 
+### ⬇️ [Descargar la última versión](https://github.com/Rubiook/diagnostico-pc/releases/latest) · `InformePC_app.zip`
+
 ## ✨ Qué hace
 
 - Corre **11 pruebas** sobre el equipo: hardware, rendimiento, procesos sospechosos, arranque
@@ -30,14 +32,18 @@ genera un **informe completo en HTML y TXT**.
 
 ## ⬇️ Cómo se usa
 
-1. **Descargá el programa**
-   - Botón verde **`Code` → `Download ZIP`** (baja todo el repositorio), o
-   - la última versión con el ZIP del programa en **[Releases](../../releases)**.
+1. **Descargá el programa** (elegí una de las dos formas)
+   - ⭐ **[Descargar `InformePC_app.zip`](https://github.com/Rubiook/diagnostico-pc/releases/latest/download/InformePC_app.zip)**
+     — siempre la última versión; el ZIP trae los 4 archivos sueltos, ahí mismo está
+     `Ejecutar_Informe_PC.bat`.
+   - O el botón verde **`Code` → `Download ZIP`** para bajar todo el repositorio: en ese caso los
+     archivos quedan dentro de la carpeta `app\`.
 2. **Descomprimilo** donde quieras (por ejemplo en el Escritorio).
 3. Si Windows bloquea los archivos por venir de internet, desbloqueálos una vez (PowerShell):
-   `Get-ChildItem "ruta\app" -Recurse | Unblock-File`
-4. Doble clic en **`app\Ejecutar_Informe_PC.bat`** y aceptá los permisos de Administrador
-   (varias pruebas los necesitan para leer el registro y los eventos).
+   `Get-ChildItem "ruta" -Recurse | Unblock-File`
+4. Doble clic en **`Ejecutar_Informe_PC.bat`** (dentro de `app\` si bajaste el repositorio completo) y
+   aceptá los permisos de Administrador (varias pruebas los necesitan para leer el registro y los
+   eventos).
 5. Apretá **ANALIZAR ESTE EQUIPO** y esperá de **2 a 4 minutos**.
 6. Al terminar:
    - el **resumen queda copiado al portapapeles** (pegalo donde quieras),
