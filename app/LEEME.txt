@@ -9,12 +9,16 @@ QUE ES
   (verde = bien, amarillo = para tener en cuenta, rojo = hay que revisarlo)
   y genera un INFORME COMPLETO en HTML y TXT con todo el detalle.
 
-  IMPORTANTE: no modifica nada del equipo. Solo lee informacion. Lo unico
-  que escribe es la carpeta de reportes.
+  IMPORTANTE: por defecto no modifica nada del equipo: solo lee informacion y
+  escribe la carpeta de reportes. Lo unico que puede cambiar algo es el boton
+  "Solucionar / actualizar" (o los interruptores -InstalarDrivers / -Arreglar),
+  que actuan solo si vos los pedis y con confirmacion.
 
 QUE GENERA (en el Escritorio, carpeta InformePC_<equipo>_<fecha>)
   Informe_<equipo>.html     -> informe completo, se abre en el navegador
   Informe_<equipo>.txt      -> el mismo informe en texto plano
+  Plan_de_acciones_<equipo>.txt -> que hacer con cada hallazgo, los comandos
+                               exactos y lo que hizo la app en esta corrida
   muestreo_cpu.csv          -> muestra de CPU segundo a segundo
   monitor_picos.csv         -> registro del monitor + tus marcas de ventilador
   bateria.html              -> opcional (informe de bateria de Windows)
@@ -59,6 +63,19 @@ TABLERO DE ESTADO (lo que ves al terminar)
   Arriba, un cartel resume el resultado global y cuantos puntos hay que
   revisar. Abajo, los botones para guardar o copiar el informe.
 
+SOLUCIONAR LO QUE ENCUENTRA (boton "Solucionar / actualizar")
+  Cada tarjeta del tablero trae una linea "QUE HACER" con el paso recomendado, y
+  ademas se genera Plan_de_acciones_<equipo>.txt con el detalle de cada caso.
+  El boton "Solucionar / actualizar..." abre un panel donde podes marcar:
+     - Reparar controladores de OTRO equipo: si detecta un driver de otra marca
+       (por ejemplo un controlador de bateria "Surface" en una laptop que no es
+       Surface), lo quita y deja que Windows instale el controlador correcto.
+     - Instalar controladores de Windows Update: descarga e instala los drivers
+       que Microsoft ofrece para este equipo.
+  Antes de aplicar pide confirmacion y, si queres, crea antes un punto de
+  restauracion. Si algo no se puede hacer solo, el panel tiene accesos directos
+  al Administrador de dispositivos y a las Actualizaciones opcionales.
+
 GUARDAR EL ANALISIS COMPLETO
   Boton "Guardar informe completo...": elegis una carpeta (por ejemplo un
   pendrive) y copia ahi los 4 archivos del analisis (HTML, TXT y los CSV).
@@ -99,6 +116,12 @@ OPCIONES AVANZADAS (modo consola)
   -ActualizacionesPendientes   consulta Windows Update (1 a 3 min extra):
                                actualizaciones de Windows + drivers
   -DriversPendientes           lo mismo pero para revisar solo los drivers
+  -InstalarDrivers             instala los controladores que ofrece Windows Update
+  -RepararAtipicos             quita los controladores de otro equipo (Surface,
+                               Dell, HP...) y deja que Windows ponga el correcto
+  -Arreglar                    hace las dos cosas anteriores
+  -Simular                     muestra lo que haria, sin cambiar nada
+                               (se usa junto con las opciones de arriba)
   -MonitorSegundos 600         monitorea 10 minutos y graba monitor_picos.csv
   -MonitorUmbral 15            % de CPU para considerar "pico" (por defecto 20)
   -OutDir "C:\Temp\rep"        cambia la carpeta de salida

@@ -68,6 +68,10 @@ Opciones útiles:
 | `-MonitorSegundos 600` | Monitorea 10 minutos y graba `monitor_picos.csv` |
 | `-MonitorUmbral 15` | % de CPU para considerar "pico" (por defecto 20) |
 | `-OutDir "C:\Temp\rep"` | Cambia la carpeta de salida |
+| `-InstalarDrivers` | Instala los controladores que ofrece Windows Update |
+| `-RepararAtipicos` | Quita los controladores de otro equipo (Surface, Dell, HP…) |
+| `-Arreglar` | Hace las dos anteriores |
+| `-Simular` | Muestra qué haría, sin cambiar nada (combinar con las de arriba) |
 | `-NoElevar` | No pedir elevación (para pruebas) |
 
 ## 🔍 Qué revisa en detalle
@@ -81,7 +85,7 @@ Opciones útiles:
 | 5 | Procesos sospechosos | Sin firma digital válida, corriendo desde AppData/Temp, conexiones de red con su proceso |
 | 6 | Arranque automático | Administrador de tareas, claves Run/RunOnce, carpetas de Inicio, tareas programadas no-Microsoft, servicios |
 | 7 | Seguridad | Defender (estado, exclusiones, amenazas), firewall, RDP/WinRM, cuentas y administradores, Winlogon/AppInit, hosts, DNS |
-| 8 | Controladores | Dispositivos sin driver o con error, drivers más antiguos, drivers nuevos en Windows Update, rastros de Driver Booster/IObit, programas instalados y hotfixes |
+| 8 | Controladores | Dispositivos sin driver o con error, controladores de **otra marca de equipo** (Surface, Dell, HP… en una PC que no lo es), drivers más antiguos, drivers nuevos en Windows Update, rastros de Driver Booster/IObit, programas instalados y hotfixes |
 | 9 | Eventos | Errores agrupados, tiempo de arranque (Id 100) y qué lo frena (Id 101), apagados inesperados, errores de disco, WHEA, limitación térmica del CPU |
 | 10 | Energía | Plan de energía, límites del procesador y boost, inicio rápido, temperaturas ACPI |
 | 11 | Velocidad del disco | Escritura y lectura (escribe y borra 256 MB) |
@@ -119,6 +123,27 @@ El informe incluye una guía de **cómo actualizarlos en orden** (y por qué **n
 
 > 🛈 Windows Update solo ofrece los drivers que Microsoft publica ahí. Para el driver más nuevo de tu
 > placa de video o del chipset, siempre conviene bajarlo del sitio oficial del fabricante.
+
+## 🛠️ Solucionar lo que encuentra
+
+Cada tarjeta del tablero incluye una línea **QUE HACER** con el paso recomendado, y además la app
+genera `Plan_de_acciones_<equipo>.txt` con el detalle de cada hallazgo, los comandos exactos y lo que
+hizo la app en esa corrida.
+
+Con el botón **Solucionar / actualizar...** la app puede:
+
+- **Reparar controladores de otro equipo**: si detecta un driver de otra marca de PC (por ejemplo un
+  controlador de batería *"Surface"* en una laptop que no es Surface), lo quita y deja que Windows
+  instale el correcto (`pnputil /delete-driver oemXX.inf /uninstall` + `pnputil /scan-devices`).
+- **Instalar los controladores que ofrece Windows Update**: los descarga e instala de verdad y muestra
+  el resultado de cada uno (incluido si hace falta reiniciar).
+
+Antes de aplicar pide **confirmación** y, si querés, crea antes un **punto de restauración**. Si algo no
+se puede automatizar, el panel trae accesos directos al **Administrador de dispositivos** y a las
+**Actualizaciones opcionales** de Windows Update.
+
+> 🔒 **La app sigue siendo de solo lectura por defecto**: no se instala ni se quita nada si no lo pedís
+> explícitamente (botón o interruptores `-InstalarDrivers`, `-RepararAtipicos`, `-Arreglar`, `-Simular`).
 
 ## 🔒 Privacidad
 

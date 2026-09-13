@@ -41,6 +41,10 @@ param(
     [switch]$TestDisco,
     [switch]$ActualizacionesPendientes,
     [switch]$DriversPendientes,
+    [switch]$InstalarDrivers,
+    [switch]$RepararAtipicos,
+    [switch]$Arreglar,
+    [switch]$Simular,
     [string]$OutDir,
     [switch]$TestGUI
 )
@@ -79,6 +83,9 @@ $global:DrvViejos     = @()
 $global:DrvPendientes = @()
 $global:DrvConsultado = $false
 $global:UpdSoftware   = 0
+$global:DrvAtipicos   = @()
+$global:LogAcciones   = New-Object System.Collections.ArrayList
+$global:PlanRuta      = ''
 
 function UI-Texto([string]$t) {
     if ($global:Bombear) { [System.Windows.Forms.Application]::DoEvents() }
@@ -539,10 +546,57 @@ function Analizar-Drivers {
                 Version   = ('' + $d.DriverVersion)
                 Proveedor = ('' + $d.DriverProviderName)
                 Clase     = ('' + $d.DeviceClass)
+                Inf       = ('' + $d.InfName)
+                Id        = ('' + $d.DeviceID)
             }
         }
     }
     $global:DrvViejos = $viejos
+
+    # --- B2) Controladores DE OTRO EQUIPO (marca de PC distinta: Surface, Dell, HP... en una maquina que no lo es) ---
+    $marcas = 'Surface|Dell|HP Inc|Hewlett|Lenovo|Acer|ASUS|Asustek|MSI|Micro-Star|Samsung|Toshiba|Dynabook|Razer|Apple|Fujitsu|Panasonic|Clevo|Sony|Huawei|Xiaomi|Medion|Vaio'
+    $cs2 = Seg { Get-CimInstance Win32_ComputerSystem }
+    $yo = ''
+    if ($cs2) { $yo = ('' + $cs2.Manufacturer + ' ' + $cs2.Model) }
+    $atip = @()
+    foreach ($d in $drv) {
+        if (-not $d.DeviceName) { continue }
+        $pr = ('' + $d.DriverProviderName)
+        $mm = [regex]::Match(($d.DeviceName + ' ' + $pr), $marcas, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if (-not $mm.Success) { continue }
+        $marca = $mm.Value
+        if ($marca -match '^(Surface|Microsoft)$' -and $yo -match 'Microsoft|Surface') { continue }
+        if ($yo -match [regex]::Escape($marca)) { continue }
+        $atip += [pscustomobject]@{
+            Marca     = $marca
+            Nombre    = ('' + $d.DeviceName)
+            Proveedor = $pr
+            Version   = ('' + $d.DriverVersion)
+            Fecha     = ('' + $d.DriverDate)
+            Clase     = ('' + $d.DeviceClass)
+            Inf       = ('' + $d.InfName)
+            Id        = ('' + $d.DeviceID)
+        }
+    }
+    $global:DrvAtipicos = $atip
+    [void]$o.Add('')
+    [void]$o.Add('  --- CONTROLADORES DE OTRO EQUIPO (marca distinta a la de esta PC) ---')
+    if ($atip.Count -eq 0) {
+        [void]$o.Add('  ninguno: no hay controladores de Surface, Dell, HP, Lenovo, etc. instalados por error')
+    } else {
+        [void]$o.Add(('  ATENCION: hay ' + $atip.Count + ' controlador(es) de OTRA marca de equipo (' + (($atip | Select-Object -ExpandProperty Marca -Unique) -join ', ') + ').'))
+        [void]$o.Add('  Estos vienen de paquetes de drivers genericos y pueden causar fallas de energia, bateria,')
+        [void]$o.Add('  teclado, pantalla o apagados inesperados. Conviene sacarlos y dejar el controlador estandar.')
+        foreach ($a in $atip) {
+            [void]$o.Add(('  - ' + $a.Nombre + '   (proveedor: ' + $a.Proveedor + '   version: ' + $a.Version + '   fecha: ' + $a.Fecha + ')'))
+            [void]$o.Add(('      clase: ' + $a.Clase + '   paquete de driver: ' + $a.Inf))
+            [void]$o.Add(('      dispositivo: ' + $a.Id))
+        }
+        [void]$o.Add('  COMO SE ARREGLA (la app lo puede hacer sola, boton "Solucionar / actualizar"):')
+        foreach ($a in ($atip | Where-Object { $_.Inf } | Select-Object -First 3)) {
+            [void]$o.Add(('      pnputil /delete-driver ' + $a.Inf + ' /uninstall    y despues    pnputil /scan-devices'))
+        }
+    }
     [void]$o.Add(('  Controladores que ve Windows: ' + $global:DrvTotal + '   |   de un fabricante y con fecha util: ' + $conFecha))
     if ($viejos.Count -gt 0) {
         [void]$o.Add(('  Con mas de ' + $anios + ' anos: ' + $viejos.Count + '   (si el equipo anda bien, no hace falta tocarlos)'))
@@ -618,6 +672,139 @@ function Analizar-Drivers {
     [void]$o.Add('  3. Placa de video y chipset: bajarlos del sitio oficial (NVIDIA, AMD, Intel o el del equipo)')
     [void]$o.Add('  4. NO usar "actualizadores" tipo Driver Booster / IObit: instalan controladores viejos o equivocados')
     return $o
+}
+
+function Resultado-Texto([int]$c) {
+    switch ($c) {
+        0 { return 'no iniciado' }
+        1 { return 'en curso' }
+        2 { return 'OK' }
+        3 { return 'termino con errores' }
+        4 { return 'FALLO' }
+        5 { return 'cancelado' }
+        default { return ('codigo ' + $c) }
+    }
+}
+
+function Instalar-DriversWindowsUpdate([switch]$Simular) {
+    # Descarga e instala los controladores que Windows Update ofrece para este equipo.
+    # Con -Simular solo muestra que haria, sin tocar nada.
+    $o = New-Object System.Collections.ArrayList
+    $r = Seg {
+        $ses = New-Object -ComObject Microsoft.Update.Session
+        $bus = $ses.CreateUpdateSearcher()
+        $u   = $bus.Search("IsInstalled=0 and Type='Driver'").Updates
+        if ($u.Count -eq 0) { return [pscustomobject]@{ Nada = $true } }
+        $col = New-Object -ComObject Microsoft.Update.UpdateColl
+        foreach ($x in $u) { if (-not $x.EulaAccepted) { [void]$x.AcceptEula() }; [void]$col.Add($x) }
+        $tit = @()
+        for ($i = 0; $i -lt $col.Count; $i++) { $tit += ('' + $col.Item($i).Title) }
+        if ($Simular) { return [pscustomobject]@{ Nada = $false; Simulado = $true; Titulos = $tit } }
+        $dn = $ses.CreateUpdateDownloader(); $dn.Updates = $col
+        $rd = $dn.Download()
+        $ins = $ses.CreateUpdateInstaller(); $ins.Updates = $col
+        $ri = $ins.Install()
+        $det = @()
+        for ($i = 0; $i -lt $col.Count; $i++) {
+            $cod = 0; $hr = 0
+            try { $ur = $ri.GetUpdateResult($i); $cod = $ur.ResultCode; $hr = $ur.HResult } catch { $cod = $ri.ResultCode; $hr = 0 }
+            $det += [pscustomobject]@{ Titulo = $tit[$i]; Resultado = $cod; HResult = $hr }
+        }
+        return [pscustomobject]@{ Nada = $false; Simulado = $false; Descarga = $rd.ResultCode; Instalacion = $ri.ResultCode; Reinicio = $ri.RebootRequired; Titulos = $tit; Detalle = $det }
+    }
+    if ($null -eq $r) {
+        [void]$o.Add('  ERROR: no se pudo consultar Windows Update (revisa la conexion a internet)')
+    } elseif ($r.Nada) {
+        [void]$o.Add('  Windows Update no tiene controladores pendientes para este equipo')
+    } else {
+        [void]$o.Add('  Controladores encontrados en Windows Update:')
+        foreach ($t in $r.Titulos) { [void]$o.Add('    - ' + $t) }
+        if ($r.Simulado) {
+            [void]$o.Add('  [SIMULACION] no se descargo ni se instalo nada (saca -Simular para hacerlo de verdad)')
+        } else {
+            [void]$o.Add(('  Descarga: ' + (Resultado-Texto $r.Descarga) + '   |   Instalacion: ' + (Resultado-Texto $r.Instalacion)))
+            foreach ($d in $r.Detalle) {
+                [void]$o.Add(('    - ' + (Resultado-Texto $d.Resultado) + '   ' + $d.Titulo))
+                if ($d.HResult) { [void]$o.Add('        detalle tecnico: 0x' + ('{0:X8}' -f $d.HResult)) }
+            }
+            if ($r.Reinicio) { [void]$o.Add('  IMPORTANTE: hay que REINICIAR el equipo para terminar de aplicar los controladores.') }
+        }
+    }
+    foreach ($l in $o) { [void]$global:LogAcciones.Add('' + $l) }
+    return $o
+}
+
+function Reparar-DriverAtipico($a, [switch]$Simular) {
+    # Quita el paquete de driver de OTRO equipo y hace que Windows vuelva a detectar el dispositivo,
+    # para que instale el controlador estandar correcto.
+    $o = New-Object System.Collections.ArrayList
+    $inf = ('' + $a.Inf)
+    if (-not $inf) { [void]$o.Add('  no se pudo averiguar el paquete (inf) de este dispositivo'); return $o }
+    [void]$o.Add(('  dispositivo: ' + $a.Nombre + '   (paquete ' + $inf + ')'))
+    if ($Simular) {
+        [void]$o.Add(('  [SIMULACION] pnputil /delete-driver ' + $inf + ' /uninstall   y despues   pnputil /scan-devices'))
+    } else {
+        [void]$o.Add(('  ejecutando: pnputil /delete-driver ' + $inf + ' /uninstall'))
+        $r1 = ''
+        try { $r1 = ((pnputil /delete-driver $inf /uninstall) 2>&1 | Out-String) } catch { $r1 = ('' + $_.Exception.Message) }
+        foreach ($l in ($r1 -split "\r?\n")) { if (('' + $l).Trim()) { [void]$o.Add('     ' + $l.Trim()) } }
+        [void]$o.Add('  ejecutando: pnputil /scan-devices')
+        $r2 = ''
+        try { $r2 = ((pnputil /scan-devices) 2>&1 | Out-String) } catch { $r2 = ('' + $_.Exception.Message) }
+        foreach ($l in ($r2 -split "\r?\n")) { if (('' + $l).Trim()) { [void]$o.Add('     ' + $l.Trim()) } }
+        [void]$o.Add('  Listo. Windows deberia haber puesto el controlador estandar del dispositivo:')
+        [void]$o.Add('  verificalo en Administrador de dispositivos. Si pide reiniciar, reinicia el equipo.')
+    }
+    foreach ($l in $o) { [void]$global:LogAcciones.Add('' + $l) }
+    return $o
+}
+
+function Nuevo-PlanAcciones {
+    # Escribe el "plan de acciones" (que hacer con cada hallazgo) en la carpeta de salida.
+    $ln = New-Object System.Collections.ArrayList
+    [void]$ln.Add(('=' * 70))
+    [void]$ln.Add(' PLAN DE ACCIONES   ' + $env:COMPUTERNAME + '   ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    [void]$ln.Add(' Que hacer con cada hallazgo del informe. La app solo lee: nada se cambia sin tu permiso.')
+    [void]$ln.Add(('=' * 70))
+    [void]$ln.Add('')
+    $i = 0
+    foreach ($x in $global:Hallazgos) {
+        if (('' + $x.Estado) -eq 'OK' -and -not $x.Solucion) { continue }
+        $i++
+        [void]$ln.Add('[' + $i + '] ' + $x.Estado + '   ' + $x.Titulo)
+        [void]$ln.Add('     QUE PASA  : ' + $x.Valor)
+        if ($x.Detalle)  { [void]$ln.Add('     DETALLE   : ' + $x.Detalle) }
+        if ($x.Solucion) { [void]$ln.Add('     QUE HACER : ' + $x.Solucion) }
+        [void]$ln.Add('')
+    }
+    [void]$ln.Add('--- LO QUE HIZO LA APP EN ESTA CORRIDA ---')
+    if ($global:LogAcciones.Count -eq 0) { [void]$ln.Add('   (nada: la app solo leyo el equipo)') }
+    else { foreach ($l in $global:LogAcciones) { [void]$ln.Add('' + $l) } }
+    [void]$ln.Add('')
+    [void]$ln.Add('--- COMANDOS EXACTOS (por si preferis hacerlo a mano) ---')
+    $hay = $false
+    foreach ($a in @($global:DrvAtipicos)) {
+        if ($a.Inf) {
+            [void]$ln.Add('   pnputil /delete-driver ' + $a.Inf + ' /uninstall')
+            [void]$ln.Add('   pnputil /scan-devices')
+            $hay = $true
+        }
+    }
+    if (@($global:DrvPendientes).Count -gt 0) {
+        [void]$ln.Add('   Configuracion > Windows Update > Actualizaciones opcionales > Actualizaciones de controladores')
+        $hay = $true
+    }
+    if (-not $hay) { [void]$ln.Add('   (no hay comandos especiales para este equipo)') }
+    [void]$ln.Add('')
+    [void]$ln.Add('--- COMO ACTUALIZAR CONTROLADORES (en este orden) ---')
+    [void]$ln.Add('   1. Windows Update > Opciones avanzadas > Actualizaciones opcionales > Actualizaciones de controladores')
+    [void]$ln.Add('   2. Administrador de dispositivos > clic derecho en el dispositivo > Actualizar controlador')
+    [void]$ln.Add('   3. Placa de video y chipset: bajarlos del sitio oficial del fabricante')
+    [void]$ln.Add('   4. NO usar "actualizadores" tipo Driver Booster / IObit')
+    $ruta = Join-Path $OutDir ('Plan_de_acciones_' + $env:COMPUTERNAME + '.txt')
+    $ln | Out-File -FilePath $ruta -Encoding utf8
+    $global:PlanRuta = $ruta
+    return $ruta
 }
 
 function Rec-Drivers {
@@ -772,6 +959,7 @@ function Rec-Resumen {
     }
     $malos = 0
     foreach ($p in (Seg { Get-Process | Where-Object Path | Sort-Object { $_.Path } -Unique })) {
+        if (-not $p.Path) { continue }
         if ((Seg { (Get-AuthenticodeSignature $p.Path).Status }) -notin @('Valid', $null)) { $malos++ }
     }
     [void]$o.Add('  Procesos activos sin firma digital valida: ' + $malos)
@@ -781,8 +969,8 @@ function Rec-Resumen {
     if ($ev) { [void]$o.Add('  ATENCION: hubo apagados inesperados (Id 41) en los ultimos 30 dias.') }
     return $o
 }
-function Nuevo-H($titulo, $valor, $detalle, $estado) {
-    return [pscustomobject]@{ Titulo = $titulo; Valor = $valor; Detalle = $detalle; Estado = $estado }
+function Nuevo-H($titulo, $valor, $detalle, $estado, $solucion = '') {
+    return [pscustomobject]@{ Titulo = $titulo; Valor = $valor; Detalle = $detalle; Estado = $estado; Solucion = $solucion }
 }
 
 function Rec-Hallazgos {
@@ -795,7 +983,7 @@ function Rec-Hallazgos {
     if ($cs) { $nombre = ('' + $cs.Manufacturer + ' ' + $cs.Model) }
     $det = ''
     if ($os) { $det = ('' + $os.Caption + '  build ' + $os.BuildNumber) }
-    [void]$h.Add((Nuevo-H 'Equipo y Windows' $nombre ($det + '   |   encendida hace ' + (Uptime-Texto)) 'OK'))
+    [void]$h.Add((Nuevo-H 'Equipo y Windows' $nombre ($det + '   |   encendida hace ' + (Uptime-Texto)) 'OK' 'Si Windows viene fallando seguido: Configuracion > Sistema > Recuperacion > Restablecer este PC (hace backup antes).'))
 
     # --- 2. Procesador ---
     $cp = Seg { Get-CimInstance Win32_Processor | Select-Object -First 1 }
@@ -803,7 +991,7 @@ function Rec-Hallazgos {
         $carga = [int](Seg { (Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object Name -eq '_Total').PercentProcessorTime })
         $est = 'OK'
         if ($carga -ge 70) { $est = 'ATENCION' }
-        [void]$h.Add((Nuevo-H 'Procesador' $cp.Name ('' + $cp.NumberOfCores + ' nucleos / ' + $cp.NumberOfLogicalProcessors + ' hilos   |   carga en este momento ' + $carga + ' %   |   ' + $cp.CurrentClockSpeed + ' MHz') $est))
+        [void]$h.Add((Nuevo-H 'Procesador' $cp.Name ('' + $cp.NumberOfCores + ' nucleos / ' + $cp.NumberOfLogicalProcessors + ' hilos   |   carga en este momento ' + $carga + ' %   |   ' + $cp.CurrentClockSpeed + ' MHz') $est 'Si la carga queda alta sin hacer nada: Administrador de tareas > ordenar por CPU y cerrar lo que no uses.'))
     }
 
     # --- 3. Memoria RAM ---
@@ -814,7 +1002,7 @@ function Rec-Hallazgos {
     $est = 'OK'
     if ($mods.Count -le 1) { $canal = 'UN SOLO MODULO: single channel, limita mucho el rendimiento de la grafica integrada'; $est = 'ATENCION' }
     if ($libre -lt 1.5) { $canal += '   |   POCA RAM LIBRE'; $est = 'REVISAR' }
-    [void]$h.Add((Nuevo-H 'Memoria RAM' ('' + $total + ' GB en ' + $mods.Count + ' modulo(s)') ('' + $libre + ' GB libres   |   ' + $canal) $est))
+    [void]$h.Add((Nuevo-H 'Memoria RAM' ('' + $total + ' GB en ' + $mods.Count + ' modulo(s)') ('' + $libre + ' GB libres   |   ' + $canal) $est 'Ampliar la memoria (16 GB) es la mejora mas notoria. Si no podes, cerra programas y pestanas mientras trabajas.'))
 
     # --- 4. Graficos ---
     $gpu = Seg { Get-CimInstance Win32_VideoController | Select-Object -First 1 }
@@ -824,7 +1012,7 @@ function Rec-Hallazgos {
             $fd = ('' + $gpu.DriverDate)
             try { if (((Get-Date) - $gpu.DriverDate).TotalDays -gt 730) { $est = 'ATENCION'; $fd += ' (driver viejo)' } } catch { }
         }
-        [void]$h.Add((Nuevo-H 'Graficos' $gpu.Name ('Driver ' + $gpu.DriverVersion + '   |   fecha ' + $fd) $est))
+        [void]$h.Add((Nuevo-H 'Graficos' $gpu.Name ('Driver ' + $gpu.DriverVersion + '   |   fecha ' + $fd) $est 'Instalar el driver oficial del fabricante (NVIDIA, AMD o Intel). No usar actualizadores genericos.'))
     }
 
     # --- 5. Almacenamiento ---
@@ -837,7 +1025,7 @@ function Rec-Hallazgos {
     $est = 'OK'; $det = ('{0} discos   |   C: {1} GB libres de {2} GB' -f $discos.Count, $lib, $tt)
     if ($salud -ne 'Healthy') { $est = 'REVISAR'; $det += '   |   SALUD: ' + $salud }
     if ($tt -gt 0 -and ($lib / $tt) -lt 0.10) { $est = 'REVISAR'; $det += '   |   POCO ESPACIO LIBRE' }
-    if ($nombres.Count -gt 0) { [void]$h.Add((Nuevo-H 'Almacenamiento' ($nombres -join ', ') $det $est)) }
+    if ($nombres.Count -gt 0) { [void]$h.Add((Nuevo-H 'Almacenamiento' ($nombres -join ', ') $det $est 'Liberar espacio: Configuracion > Sistema > Almacenamiento (Temporales, Papelera, Descargas). Dejar 15% libre.')) }
 
     # --- 6. Velocidad del disco ---
     $est = 'OK'; $val = 'no medido'; $det = 'Marca la opcion "prueba de disco" y volve a analizar para medirlo.'
@@ -847,7 +1035,7 @@ function Rec-Hallazgos {
         if ([double]$global:DiscoEscrituraMBs -lt 150) { $est = 'REVISAR'; $det += '   |   MUY LENTO' }
         elseif ([double]$global:DiscoEscrituraMBs -lt 300) { $est = 'ATENCION' }
     }
-    [void]$h.Add((Nuevo-H 'Velocidad del disco' $val $det $est))
+    [void]$h.Add((Nuevo-H 'Velocidad del disco' $val $det $est 'Revisar el SSD con CrystalDiskInfo y dejar espacio libre. Si sigue lento, reemplazar el disco: es lo que mas frena al equipo.'))
 
     # --- 7. Windows Update ---
     $hf = Seg { Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1 }
@@ -860,7 +1048,9 @@ function Rec-Hallazgos {
         if ([int]$global:UpdPendientes -gt 0) { $est = 'ATENCION'; $det += ('   |   ' + $global:UpdPendientes + ' PENDIENTES (' + $que + ')') }
         else { $det += '   |   sin actualizaciones pendientes' }
     }
-    [void]$h.Add((Nuevo-H 'Windows Update' $val $det $est))
+    $solWU = 'Configuracion > Windows Update > Buscar actualizaciones (los controladores estan en Actualizaciones opcionales).'
+    if (@($global:DrvPendientes).Count -gt 0) { $solWU = 'Tenes controladores pendientes: usa el boton "Solucionar / actualizar" y la app te los instala.' }
+    [void]$h.Add((Nuevo-H 'Windows Update' $val $det $est $solWU))
 
     # --- 8. Seguridad ---
     $d = Seg { Get-MpComputerStatus }
@@ -875,25 +1065,26 @@ function Rec-Hallazgos {
     if ($amen.Count -gt 0) { $est = 'REVISAR'; $det += ('   |   ' + $amen.Count + ' amenaza(s) en el historial') }
     $tsr = Seg { (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server').fDenyTSConnections }
     if ($tsr -eq 0) { if ($est -eq 'OK') { $est = 'ATENCION' }; $det += '   |   Escritorio remoto HABILITADO (desactivalo si no lo usas)' }
-    [void]$h.Add((Nuevo-H 'Seguridad (Defender)' $val $det $est))
+    [void]$h.Add((Nuevo-H 'Seguridad (Defender)' $val $det $est 'Encender la proteccion en tiempo real, borrar las exclusiones que no reconozcas y hacer un examen completo.'))
 
     # --- 9. Programas de arranque ---
     $ini = @(Seg { Get-CimInstance Win32_StartupCommand })
     $tar = @(Seg { Get-ScheduledTask | Where-Object { $_.TaskPath -notlike '\Microsoft\*' } | Where-Object { $_.Triggers | Where-Object { $_.CimClass.CimClassName -match 'Boot|Logon' } } })
     $est = 'OK'
     if ($ini.Count -gt 15 -or $tar.Count -gt 10) { $est = 'ATENCION' }
-    [void]$h.Add((Nuevo-H 'Programas de arranque' ('' + $ini.Count + ' programas de inicio') ('' + $tar.Count + ' tareas programadas corren al encender o iniciar sesion   |   menos es mas: todas consumen RAM y CPU al arrancar') $est))
+    [void]$h.Add((Nuevo-H 'Programas de arranque' ('' + $ini.Count + ' programas de inicio') ('' + $tar.Count + ' tareas programadas corren al encender o iniciar sesion   |   menos es mas: todas consumen RAM y CPU al arrancar') $est 'Administrador de tareas > Aplicaciones de inicio > Deshabilitar lo que no uses (no hace falta desinstalar).'))
 
     # --- 10. Procesos sospechosos ---
     $sinFirma = 0
     foreach ($p in (Seg { Get-Process | Where-Object Path | Sort-Object { $_.Path } -Unique })) {
+        if (-not $p.Path) { continue }
         if ((Seg { (Get-AuthenticodeSignature $p.Path).Status }) -notin @('Valid', $null)) { $sinFirma++ }
     }
     $enUsr = @(Seg { Get-Process | Where-Object { $_.Path -match 'AppData|ProgramData|Users\\Public|Downloads' } }).Count
     $est = 'OK'
     if ($sinFirma -gt 0) { $est = 'ATENCION' }
     if ($enUsr -gt 3) { $est = 'ATENCION' }
-    [void]$h.Add((Nuevo-H 'Procesos en ejecucion' ('' + $sinFirma + ' sin firma digital valida') ('' + $enUsr + ' corriendo desde carpetas de usuario o temporales   |   si no los reconoces, hay que mirarlos en el detalle') $est))
+    [void]$h.Add((Nuevo-H 'Procesos en ejecucion' ('' + $sinFirma + ' sin firma digital valida') ('' + $enUsr + ' corriendo desde carpetas de usuario o temporales   |   si no los reconoces, hay que mirarlos en el detalle') $est 'Revisa el detalle: si no reconoces un proceso de AppData/Temp, buscalo por su nombre antes de confiar en el.'))
 
     # --- 11. Picos de CPU ---
     $val = 'sin muestreo'; $det = 'Muestreo desactivado (0 segundos).'; $est = 'OK'
@@ -902,7 +1093,7 @@ function Rec-Hallazgos {
         $det = ('Proceso que mas CPU acumulo: ' + $global:MuestreoTopProc + ' (' + $global:MuestreoTopPorc + ' % del tiempo)   |   muestreo de ' + $MuestreoSegundos + ' s')
         if ([int]$global:MuestreoMaxCPU -ge 90) { $est = 'ATENCION' }
     }
-    [void]$h.Add((Nuevo-H 'Uso de CPU (picos)' $val $det $est))
+    [void]$h.Add((Nuevo-H 'Uso de CPU (picos)' $val $det $est 'Anota la hora del pico y usa el monitor de la app: si no hay nada abierto, suele ser una actualizacion o telemetria.'))
 
     # --- 12. Energia y temperatura ---
     $e37 = @(Seg { Get-WinEvent -FilterHashtable @{LogName='System';ProviderName='Microsoft-Windows-Kernel-Processor-Power';Id=37;StartTime=(Get-Date).AddDays(-7)} -MaxEvents 20 -ErrorAction Stop })
@@ -911,7 +1102,7 @@ function Rec-Hallazgos {
     $est = 'OK'; $det = 'Plan de energia: ' + $plan
     if ($e37.Count -gt 0) { $est = 'ATENCION'; $det += ('   |   ' + $e37.Count + ' avisos de limitacion del procesador por firmware o temperatura (Id 37)') }
     if ($e55.Count -gt 0) { $det += ('   |   ' + $e55.Count + ' avisos informativos de energia del CPU (Id 55: es normal, uno por nucleo al cargar el perfil)') }
-    [void]$h.Add((Nuevo-H 'Energia y temperatura' 'Ventilador y rendimiento' $det $est))
+    [void]$h.Add((Nuevo-H 'Energia y temperatura' 'Ventilador y rendimiento' $det $est 'Plan Equilibrado o Alto rendimiento, limpiar el ventilador y usar base elevada. En laptops, renovar la pasta termica.'))
 
     # --- 13. Estabilidad ---
     $errores = @(Seg { Get-WinEvent -FilterHashtable @{LogName='System';Level=1,2;StartTime=(Get-Date).AddDays(-7)} -MaxEvents 300 -ErrorAction Stop })
@@ -923,7 +1114,7 @@ function Rec-Hallazgos {
     if ($cortes.Count -gt 0 -or $edisco.Count -gt 0) { $est = 'REVISAR' }
     if ($whea.Count -gt 0 -and $est -eq 'OK') { $est = 'ATENCION' }
     $det = ('' + $errores.Count + ' errores criticos en 7 dias   |   ' + $cortes.Count + ' apagados inesperados   |   ' + $edisco.Count + ' errores de disco reales   |   ' + $whea.Count + ' avisos de hardware WHEA (30 dias)')
-    [void]$h.Add((Nuevo-H 'Estabilidad del sistema' 'Errores y apagados' $det $est))
+    [void]$h.Add((Nuevo-H 'Estabilidad del sistema' 'Errores y apagados' $det $est 'Con apagados inesperados: revisar bateria/cable y temperatura. Con errores de disco: revisar el SSD. Con WHEA repetidos: es hardware.'))
 
     # --- 14. Arranque de Windows ---
     $ev = Seg { Get-WinEvent -LogName Microsoft-Windows-Diagnostics-Performance/Operational -MaxEvents 80 -ErrorAction Stop }
@@ -938,34 +1129,51 @@ function Rec-Hallazgos {
         if ($masRep) { $det += '   |   lo que mas lo frena: ' + $masRep.Name }
         $est = 'OK'
         if ($c101.Count -gt 5) { $est = 'ATENCION' }
-        [void]$h.Add((Nuevo-H 'Arranque de Windows' $val $det $est))
+        $sol14 = 'Mantener pocos programas de inicio: es lo que mas ayuda a que el equipo arranque rapido.'
+        if ($c101.Count -gt 5) { $sol14 = 'Deshabilitar programas de inicio y revisar el disco: un SSD lento es la causa mas comun de arranque largo.' }
+        [void]$h.Add((Nuevo-H 'Arranque de Windows' $val $det $est $sol14))
     } else {
-        [void]$h.Add((Nuevo-H 'Arranque de Windows' 'sin datos' 'El registro de rendimiento de arranque necesita ejecutar la app como Administrador.' 'ATENCION'))
+        [void]$h.Add((Nuevo-H 'Arranque de Windows' 'sin datos' 'El registro de rendimiento de arranque necesita ejecutar la app como Administrador.' 'ATENCION' 'Ejecutar la app como Administrador (doble clic en Ejecutar_Informe_PC.bat) para medir el arranque.'))
     }
 
     # --- 15. Controladores ---
     $sys = @(Seg { Get-ChildItem (Join-Path $env:SystemRoot 'System32\drivers') -Filter *.sys | Where-Object { $_.LastWriteTime -gt (Get-Date).AddDays(-90) } })
     $iob = Seg { Get-CimInstance Win32_Service | Where-Object { $_.Name -match 'iobit|driverbooster|ascdrv|advancedsystemcare' } }
     $hfUlt = Seg { Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1 }
-    $prob = @($global:DrvProblemas); $viej = @($global:DrvViejos); $pend = @($global:DrvPendientes)
-    $val = 'Controladores al dia'; $est = 'OK'
+    $prob = @($global:DrvProblemas); $viej = @($global:DrvViejos); $pend = @($global:DrvPendientes); $atip = @($global:DrvAtipicos)
+    $val = 'Controladores al dia'; $est = 'OK'; $sol = ''
     $det = ('' + $global:DrvTotal + ' controladores instalados   |   ' + $sys.Count + ' archivos .sys modificados en los ultimos 90 dias')
     if ($sys.Count -gt 0 -and $hfUlt -and $hfUlt.InstalledOn) { $det += (' (coincide con la actualizacion de Windows del ' + ('{0:yyyy-MM-dd}' -f $hfUlt.InstalledOn) + ')') }
     if ($prob.Count -gt 0) {
         $est = 'REVISAR'
         $val = ('' + $prob.Count + ' dispositivo(s) con problema de controlador')
         $det += ('   |   ' + (($prob | Select-Object -First 2 | ForEach-Object { $_.Nombre + ' (codigo ' + $_.Codigo + ')' }) -join ' / '))
+        $sol = 'Boton "Solucionar / actualizar": reinstalar el controlador del dispositivo que falla.'
+    } elseif ($atip.Count -gt 0) {
+        $val = ('' + $atip.Count + ' controlador(es) de OTRO equipo')
+        $sensible = @($atip | Where-Object { ('' + $_.Clase) -match 'BATTERY|SYSTEM|DISPLAY|NET|MEDIA' }).Count
+        if ($sensible -gt 0) { $est = 'REVISAR' } else { $est = 'ATENCION' }
+        $det += ('   |   ' + (($atip | Select-Object -First 2 | ForEach-Object { $_.Nombre }) -join ' / '))
+        $sol = 'Boton "Solucionar / actualizar": la app quita el paquete de driver ajeno y deja que Windows ponga el correcto.'
     } elseif ($pend.Count -gt 0) {
         $est = 'ATENCION'
         $val = ('' + $pend.Count + ' controlador(es) para actualizar')
         $det += ('   |   ' + (($pend | Select-Object -First 2 | ForEach-Object { $_.Titulo }) -join ' / '))
+        $sol = 'Boton "Solucionar / actualizar": la app descarga e instala esos controladores desde Windows Update.'
     } elseif ($global:DrvConsultado) {
         $val = 'Sin controladores pendientes'
         $det += '   |   Windows Update no ofrece controladores nuevos'
     }
-    if ($viej.Count -gt 0) { $det += ('   |   ' + $viej.Count + ' con fecha de mas de 4 anos') }
-    if ($iob) { if ($est -eq 'OK') { $est = 'ATENCION' }; $det += '   |   Driver Booster / IObit instalado: conviene desinstalarlo' }
-    [void]$h.Add((Nuevo-H 'Controladores (drivers)' $val $det $est))
+    if ($viej.Count -gt 0) {
+        $det += ('   |   ' + $viej.Count + ' con fecha de mas de 4 anos')
+        if (-not $sol) { $sol = ('Si algo falla, bajar del fabricante el controlador de: ' + (($viej | Select-Object -First 2 | ForEach-Object { $_.Nombre }) -join ', ')) }
+    }
+    if ($iob) {
+        if ($est -eq 'OK') { $est = 'ATENCION' }
+        $det += '   |   Driver Booster / IObit instalado: conviene desinstalarlo'
+        if (-not $sol) { $sol = 'Desinstalar Driver Booster / IObit y actualizar desde el fabricante.' }
+    }
+    [void]$h.Add((Nuevo-H 'Controladores (drivers)' $val $det $est $sol))
 
     # --- Estado global ---
     $global:NRevisar = @($h | Where-Object { $_.Estado -eq 'REVISAR' }).Count
@@ -1042,6 +1250,9 @@ function Ejecutar-Diagnostico {
     $global:DrvViejos = @()
     $global:DrvPendientes = @()
     $global:DrvConsultado = $false
+    $global:DrvAtipicos = @()
+    $global:LogAcciones = New-Object System.Collections.ArrayList
+    $global:PlanRuta = ''
     $global:MuestreoMaxCPU = 0
     $global:MuestreoTopProc = ''
     $global:MuestreoTopPorc = 0
@@ -1080,6 +1291,7 @@ function Ejecutar-Diagnostico {
         [void]$global:Sec[$k].Add(('  [{0,-8}] {1}' -f $x.Estado, $x.Titulo))
         [void]$global:Sec[$k].Add(('             ' + $x.Valor))
         if ($x.Detalle) { [void]$global:Sec[$k].Add(('             ' + $x.Detalle)) }
+        if ($x.Solucion) { [void]$global:Sec[$k].Add(('      QUE HACER: ' + $x.Solucion)) }
         [void]$global:Sec[$k].Add('')
     }
     [void]$global:Sec[$k].Add(('  RESULTADO GLOBAL: ' + $global:EstadoGlobal + '    (' + $global:NRevisar + ' para revisar, ' + $global:NAtender + ' para atender, ' + $global:Hallazgos.Count + ' componentes analizados)'))
@@ -1090,6 +1302,8 @@ function Ejecutar-Diagnostico {
     UI-Texto 'Escribiendo el informe en disco...'
     Escribir-Txt
     Escribir-Html
+    try { [void](Nuevo-PlanAcciones) } catch { }
+    if ($global:PlanRuta) { UI-Texto ('Plan de acciones: ' + $global:PlanRuta) }
     return $true
 }
 
@@ -1192,25 +1406,30 @@ function Mostrar-GUI {
         if ($null -eq $col)    { $col = [System.Drawing.Color]::FromArgb(37, 99, 235) }
         if ($null -eq $C_CARD) { $C_CARD = [System.Drawing.Color]::White }
         $p = New-Object System.Windows.Forms.Panel
-        $p.Size = New-Object System.Drawing.Size(516, 116)
+        $p.Size = New-Object System.Drawing.Size(516, 142)
         $p.BackColor = $C_CARD
         $p.Margin = New-Object System.Windows.Forms.Padding(6)
         $p.Add_Paint({ param($s, $e) $e.Graphics.DrawRectangle($penBorde, 0, 0, $s.Width - 2, $s.Height - 2) })
         $bar = New-Object System.Windows.Forms.Panel
         $bar.Location = New-Object System.Drawing.Point(0, 0)
-        $bar.Size = New-Object System.Drawing.Size(7, 116)
+        $bar.Size = New-Object System.Drawing.Size(7, 142)
         $bar.BackColor = $col
         $ic = Nuevo-Label $ico 16 12 28 26 $F_ICO $col
         $t1 = Nuevo-Label $hall.Titulo 48 10 340 20 $F_H2 $C_TXT
         $v1 = Nuevo-Label $hall.Valor 48 34 456 26 $F_VAL $col
         $v1.AutoEllipsis = $true
-        $d1 = Nuevo-Label $hall.Detalle 48 62 456 46 $F_SUB $C_SUB
+        $d1 = Nuevo-Label $hall.Detalle 48 62 456 44 $F_SUB $C_SUB
         $d1.AutoEllipsis = $true
         [void]$p.Controls.Add($bar)
         [void]$p.Controls.Add($ic)
         [void]$p.Controls.Add($t1)
         [void]$p.Controls.Add($v1)
         [void]$p.Controls.Add($d1)
+        if ($hall.Solucion) {
+            $s1 = Nuevo-Label ('QUE HACER: ' + $hall.Solucion) 48 108 456 30 $F_SUB ([System.Drawing.Color]::FromArgb(29, 78, 216))
+            $s1.AutoEllipsis = $true
+            [void]$p.Controls.Add($s1)
+        }
         return $p
     }
 
@@ -1328,31 +1547,40 @@ function Mostrar-GUI {
 
     $btnGuardar = New-Object System.Windows.Forms.Button
     $btnGuardar.Text = 'Guardar informe completo...'
-    $btnGuardar.Size = New-Object System.Drawing.Size(250, 44)
-    $btnGuardar.Location = New-Object System.Drawing.Point(40, 16)
+    $btnGuardar.Size = New-Object System.Drawing.Size(240, 44)
+    $btnGuardar.Location = New-Object System.Drawing.Point(30, 16)
     $btnGuardar.BackColor = $C_OK; $btnGuardar.ForeColor = [System.Drawing.Color]::White
     $btnGuardar.FlatStyle = 'Flat'; $btnGuardar.FlatAppearance.BorderSize = 0
     $btnGuardar.Font = $F_BTN; $btnGuardar.Cursor = 'Hand'
     [void]$btnBar.Controls.Add($btnGuardar)
 
+    $btnSolucionar = New-Object System.Windows.Forms.Button
+    $btnSolucionar.Text = 'Solucionar / actualizar...'
+    $btnSolucionar.Size = New-Object System.Drawing.Size(240, 44)
+    $btnSolucionar.Location = New-Object System.Drawing.Point(280, 16)
+    $btnSolucionar.BackColor = $C_AZUL; $btnSolucionar.ForeColor = [System.Drawing.Color]::White
+    $btnSolucionar.FlatStyle = 'Flat'; $btnSolucionar.FlatAppearance.BorderSize = 0
+    $btnSolucionar.Font = $F_BTN; $btnSolucionar.Cursor = 'Hand'
+    [void]$btnBar.Controls.Add($btnSolucionar)
+
     $btnAbrir = New-Object System.Windows.Forms.Button
     $btnAbrir.Text = 'Abrir informe (HTML)'
-    $btnAbrir.Size = New-Object System.Drawing.Size(230, 44)
-    $btnAbrir.Location = New-Object System.Drawing.Point(302, 16)
+    $btnAbrir.Size = New-Object System.Drawing.Size(190, 44)
+    $btnAbrir.Location = New-Object System.Drawing.Point(530, 16)
     $btnAbrir.FlatStyle = 'Flat'; $btnAbrir.Font = $F_TXT; $btnAbrir.Cursor = 'Hand'
     [void]$btnBar.Controls.Add($btnAbrir)
 
     $btnCopiar = New-Object System.Windows.Forms.Button
     $btnCopiar.Text = 'Copiar resumen'
-    $btnCopiar.Size = New-Object System.Drawing.Size(200, 44)
-    $btnCopiar.Location = New-Object System.Drawing.Point(544, 16)
+    $btnCopiar.Size = New-Object System.Drawing.Size(150, 44)
+    $btnCopiar.Location = New-Object System.Drawing.Point(728, 16)
     $btnCopiar.FlatStyle = 'Flat'; $btnCopiar.Font = $F_TXT; $btnCopiar.Cursor = 'Hand'
     [void]$btnBar.Controls.Add($btnCopiar)
 
     $btnRepetir = New-Object System.Windows.Forms.Button
     $btnRepetir.Text = 'Analizar de nuevo'
-    $btnRepetir.Size = New-Object System.Drawing.Size(200, 44)
-    $btnRepetir.Location = New-Object System.Drawing.Point(756, 16)
+    $btnRepetir.Size = New-Object System.Drawing.Size(160, 44)
+    $btnRepetir.Location = New-Object System.Drawing.Point(886, 16)
     $btnRepetir.FlatStyle = 'Flat'; $btnRepetir.Font = $F_TXT; $btnRepetir.Cursor = 'Hand'
     [void]$btnBar.Controls.Add($btnRepetir)
 
@@ -1407,6 +1635,7 @@ function Mostrar-GUI {
         foreach ($x in $global:Hallazgos) {
             [void]$l.Add(('[' + $x.Estado + '] ' + $x.Titulo + ': ' + $x.Valor))
             if ($x.Detalle) { [void]$l.Add('        ' + $x.Detalle) }
+            if ($x.Solucion) { [void]$l.Add('        QUE HACER: ' + $x.Solucion) }
         }
         return ($l -join [Environment]::NewLine)
     }
@@ -1437,7 +1666,144 @@ function Mostrar-GUI {
             $lblBannerTitulo.Text = ('' + $global:NRevisar + ' punto(s) que conviene revisar')
             $lblBannerDetalle.Text = 'Revisa las tarjetas en rojo. Guarda el informe completo y envialo para el analisis detallado.'
         }
+        $acc = @($global:DrvPendientes).Count + @($global:DrvAtipicos).Count
+        if ($acc -gt 0) { $lblBannerDetalle.Text += ('   La app puede aplicar ' + $acc + ' solucion(es) automatica(s): boton "Solucionar / actualizar".') }
     }
+
+    function Mostrar-Soluciones {
+        param([switch]$SoloConstruir)
+        $f = New-Object System.Windows.Forms.Form
+        $f.Text = 'Solucionar / actualizar'
+        $f.Size = New-Object System.Drawing.Size(920, 690)
+        $f.StartPosition = 'CenterParent'
+        $f.BackColor = $C_FONDO
+        $f.Font = $F_TXT
+        $f.MinimizeBox = $false
+        [void]$f.Controls.Add((Nuevo-Label 'Que puede hacer la app por vos' 24 16 700 30 $F_H2 $C_TXT))
+        [void]$f.Controls.Add((Nuevo-Label 'Marca lo que quieras aplicar y confirma. Si no marcas nada, no se cambia nada del equipo.' 26 46 850 20 $F_TXT $C_SUB))
+
+        $lista = New-Object System.Windows.Forms.CheckedListBox
+        $lista.Location = New-Object System.Drawing.Point(26, 74)
+        $lista.Size = New-Object System.Drawing.Size(850, 148)
+        $lista.CheckOnClick = $true
+        $lista.Font = $F_TXT
+        $na = @($global:DrvAtipicos).Count
+        $np = @($global:DrvPendientes).Count
+        if ($na -gt 0) {
+            [void]$lista.Items.Add(('Reparar ' + $na + ' controlador(es) de OTRO equipo: ' + (($global:DrvAtipicos | Select-Object -First 2 | ForEach-Object { $_.Nombre }) -join ', ')), $true)
+        } else {
+            [void]$lista.Items.Add('Reparar controladores de otro equipo (no se encontro ninguno)', $false)
+        }
+        if ($np -gt 0) { [void]$lista.Items.Add(('Instalar ' + $np + ' controlador(es) que ofrece Windows Update'), $true) }
+        else { [void]$lista.Items.Add('Buscar e instalar controladores nuevos en Windows Update', $true) }
+
+        $chkPunto = New-Object System.Windows.Forms.CheckBox
+        $chkPunto.Text = 'Crear un punto de restauracion antes de tocar los controladores (tarda alrededor de 1 minuto)'
+        $chkPunto.Location = New-Object System.Drawing.Point(26, 232); $chkPunto.AutoSize = $true
+        [void]$f.Controls.Add($chkPunto)
+
+        $btnAplicar = New-Object System.Windows.Forms.Button
+        $btnAplicar.Text = 'Aplicar lo seleccionado'
+        $btnAplicar.Size = New-Object System.Drawing.Size(230, 40)
+        $btnAplicar.Location = New-Object System.Drawing.Point(26, 262)
+        $btnAplicar.BackColor = $C_AZUL; $btnAplicar.ForeColor = [System.Drawing.Color]::White
+        $btnAplicar.FlatStyle = 'Flat'; $btnAplicar.FlatAppearance.BorderSize = 0
+        $btnAplicar.Font = $F_BTN; $btnAplicar.Cursor = 'Hand'
+        [void]$f.Controls.Add($btnAplicar)
+
+        $btnDM = New-Object System.Windows.Forms.Button
+        $btnDM.Text = 'Administrador de dispositivos'
+        $btnDM.Size = New-Object System.Drawing.Size(230, 40)
+        $btnDM.Location = New-Object System.Drawing.Point(268, 262)
+        $btnDM.FlatStyle = 'Flat'; $btnDM.Cursor = 'Hand'
+        [void]$f.Controls.Add($btnDM)
+
+        $btnWU = New-Object System.Windows.Forms.Button
+        $btnWU.Text = 'Actualizaciones opcionales'
+        $btnWU.Size = New-Object System.Drawing.Size(210, 40)
+        $btnWU.Location = New-Object System.Drawing.Point(510, 262)
+        $btnWU.FlatStyle = 'Flat'; $btnWU.Cursor = 'Hand'
+        [void]$f.Controls.Add($btnWU)
+
+        $btnPlan = New-Object System.Windows.Forms.Button
+        $btnPlan.Text = 'Ver plan de acciones'
+        $btnPlan.Size = New-Object System.Drawing.Size(180, 40)
+        $btnPlan.Location = New-Object System.Drawing.Point(732, 262)
+        $btnPlan.FlatStyle = 'Flat'; $btnPlan.Cursor = 'Hand'
+        [void]$f.Controls.Add($btnPlan)
+
+        $salida = New-Object System.Windows.Forms.TextBox
+        $salida.Multiline = $true; $salida.ScrollBars = 'Vertical'; $salida.WordWrap = $false
+        $salida.ReadOnly = $true; $salida.Font = $F_MONO
+        $salida.Location = New-Object System.Drawing.Point(26, 314)
+        $salida.Size = New-Object System.Drawing.Size(850, 248)
+        $salida.BackColor = [System.Drawing.Color]::White
+        [void]$f.Controls.Add($salida)
+        $script:txtSol = $salida
+
+        [void]$f.Controls.Add((Nuevo-Label 'Si algo no se puede instalar solo, usa estos accesos: Administrador de dispositivos, Actualizaciones opcionales o el plan de acciones.' 26 570 850 40 $F_SUB $C_SUB))
+
+        $btnCerrar = New-Object System.Windows.Forms.Button
+        $btnCerrar.Text = 'Cerrar'
+        $btnCerrar.Size = New-Object System.Drawing.Size(150, 34)
+        $btnCerrar.Location = New-Object System.Drawing.Point(726, 612)
+        $btnCerrar.FlatStyle = 'Flat'; $btnCerrar.Cursor = 'Hand'
+        [void]$f.Controls.Add($btnCerrar)
+
+        $btnDM.Add_Click({ Start-Process 'devmgmt.msc' })
+        $btnWU.Add_Click({ Start-Process 'ms-settings:windowsupdate-optionalupdates' })
+        $btnPlan.Add_Click({
+            if ($global:PlanRuta -and (Test-Path $global:PlanRuta)) { Start-Process $global:PlanRuta }
+            else { [System.Windows.Forms.MessageBox]::Show('Todavia no hay plan de acciones.') | Out-Null }
+        })
+        $btnCerrar.Add_Click({ $f.Close() })
+        $btnAplicar.Add_Click({
+            $sel = @()
+            for ($i = 0; $i -lt $lista.Items.Count; $i++) { if ($lista.GetItemChecked($i)) { $sel += $i } }
+            if ($sel.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show('No marcaste ninguna accion.') | Out-Null; return }
+            $rr = [System.Windows.Forms.MessageBox]::Show('Se van a aplicar cambios en este equipo (instalar o quitar controladores). Continuar?', 'Confirmar', 'YesNo', 'Question')
+            if ($rr -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+            $script:txtSol.Clear()
+            $uiPrevio = $global:UI
+            $global:UI = { param($t) if ($script:txtSol) { $script:txtSol.AppendText($t + [Environment]::NewLine); $script:txtSol.SelectionStart = $script:txtSol.TextLength; $script:txtSol.ScrollToCaret(); [System.Windows.Forms.Application]::DoEvents() } }
+            try {
+                if ($chkPunto.Checked) {
+                    $script:txtSol.AppendText('Creando punto de restauracion (puede tardar un minuto)...' + [Environment]::NewLine)
+                    [System.Windows.Forms.Application]::DoEvents()
+                    $rp = ''
+                    try {
+                        Enable-ComputerRestore -Drive ($env:SystemDrive + '\') -ErrorAction SilentlyContinue
+                        Checkpoint-Computer -Description ('Antes de InformePC ' + (Get-Date -Format 'yyyy-MM-dd HH:mm')) -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
+                        $rp = 'creado'
+                    } catch { $rp = 'no se pudo crear (' + $_.Exception.Message + ')' }
+                    $script:txtSol.AppendText('Punto de restauracion: ' + $rp + [Environment]::NewLine + [Environment]::NewLine)
+                }
+                $hacerAtip = $false; $hacerWU = $false
+                foreach ($i in $sel) {
+                    if (('' + $lista.Items[$i]) -match '^Reparar') { $hacerAtip = $true } else { $hacerWU = $true }
+                }
+                if ($hacerAtip) {
+                    foreach ($a in @($global:DrvAtipicos)) { foreach ($l in (Reparar-DriverAtipico $a)) { $script:txtSol.AppendText($l + [Environment]::NewLine) } }
+                }
+                if ($hacerWU) {
+                    foreach ($l in (Instalar-DriversWindowsUpdate)) { $script:txtSol.AppendText($l + [Environment]::NewLine) }
+                }
+                try { [void](Nuevo-PlanAcciones) } catch { }
+                $script:txtSol.AppendText([Environment]::NewLine + 'Listo. Plan de acciones actualizado en: ' + $global:PlanRuta + [Environment]::NewLine)
+                $script:txtSol.AppendText('Si la app pedia reiniciar, reinicia el equipo y volve a analizar para ver como quedo.' + [Environment]::NewLine)
+            } catch {
+                $script:txtSol.AppendText('ERROR: ' + $_.Exception.Message + [Environment]::NewLine)
+            } finally {
+                $global:UI = $uiPrevio
+                $global:Bombear = $false
+                $chkPunto.Checked = $false
+            }
+        })
+        if ($SoloConstruir) { $f.Dispose(); return $true }
+        [void]$f.ShowDialog($form)
+    }
+
+    $btnSolucionar.Add_Click({ Mostrar-Soluciones })
 
     $btnOpc.Add_Click({ $script:opc.Visible = -not $script:opc.Visible })
 
@@ -1515,8 +1881,10 @@ function Mostrar-GUI {
         foreach ($c in $flow.Controls) { $ctrl += $c.Controls.Count }
         $prom = 0
         if ($n -gt 0) { $prom = [int]($ctrl / $n) }
+        $solOk = 'no probado'
+        try { [void](Mostrar-Soluciones -SoloConstruir); $solOk = 'OK' } catch { $solOk = ('FALLO: ' + $_.Exception.Message) }
         $form.Dispose()
-        Write-Host ('AUTOTEST GUI: tarjetas=' + $n + ' | controles por tarjeta=' + $prom + ' (esperado 5) | errores capturados=' + $Error.Count + ' | estado global=' + $global:EstadoGlobal)
+        Write-Host ('AUTOTEST GUI: tarjetas=' + $n + ' | controles por tarjeta=' + $prom + ' (esperado 6) | dialogo soluciones=' + $solOk + ' | errores capturados=' + $Error.Count + ' | estado global=' + $global:EstadoGlobal)
         $i = 0
         foreach ($e in $Error) { $i++; Write-Host ('   ERROR ' + $i + ' L' + $e.InvocationInfo.ScriptLineNumber + ': ' + $e.Exception.Message) }
         return $true
@@ -1555,6 +1923,35 @@ if ($Auto) {
     Write-Host ('Informe HTML : ' + $global:Htm)
     Write-Host ('Informe TXT  : ' + $global:Txt)
     Write-Host ('CSV de CPU   : ' + (Join-Path $OutDir 'muestreo_cpu.csv'))
+    Write-Host ''
+    if ($InstalarDrivers -or $RepararAtipicos -or $Arreglar) {
+        Write-Host '============= ACCIONES (esto SI cambia el equipo) =============' -ForegroundColor Yellow
+        if (-not $esAdmin) {
+            Write-Host 'AVISO: hay que ejecutar como Administrador para aplicar los cambios.' -ForegroundColor Red
+        } else {
+            if ($Simular) { Write-Host 'MODO SIMULACION: no se cambia nada, solo se muestra que se haria.' -ForegroundColor Yellow }
+            if ($InstalarDrivers -or $Arreglar) {
+                Write-Host ''
+                Write-Host '-- Controladores que ofrece Windows Update --' -ForegroundColor Cyan
+                foreach ($l in (Instalar-DriversWindowsUpdate -Simular:$Simular)) { Write-Host $l }
+            }
+            if ($RepararAtipicos -or $Arreglar) {
+                $ats = @($global:DrvAtipicos)
+                Write-Host ''
+                if ($ats.Count -eq 0) {
+                    Write-Host '-- No hay controladores de otro equipo para reparar --' -ForegroundColor Cyan
+                } else {
+                    Write-Host ('-- Reparando ' + $ats.Count + ' controlador(es) de otro equipo --') -ForegroundColor Cyan
+                    foreach ($a in $ats) { foreach ($l in (Reparar-DriverAtipico $a -Simular:$Simular)) { Write-Host $l } }
+                }
+            }
+        }
+        try { [void](Nuevo-PlanAcciones) } catch { }
+        if ($global:PlanRuta) { Write-Host ('Plan de acciones actualizado: ' + $global:PlanRuta) -ForegroundColor Green }
+        Write-Host '===============================================================' -ForegroundColor Yellow
+        Write-Host ''
+    }
+    if ($global:PlanRuta) { Write-Host ('Plan de acciones (que hacer con cada hallazgo): ' + $global:PlanRuta) -ForegroundColor Green }
     try {
         $txt = 'RESUMEN DE LA PC ' + $env:COMPUTERNAME + [Environment]::NewLine
         if ($global:Sec.Contains('0. RESUMEN DE HALLAZGOS')) { $txt += ($global:Sec['0. RESUMEN DE HALLAZGOS'] -join [Environment]::NewLine) }
