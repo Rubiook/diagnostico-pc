@@ -1674,38 +1674,53 @@ function Mostrar-GUI {
         param([switch]$SoloConstruir)
         $f = New-Object System.Windows.Forms.Form
         $f.Text = 'Solucionar / actualizar'
-        $f.Size = New-Object System.Drawing.Size(920, 690)
+        $f.Size = New-Object System.Drawing.Size(940, 730)
         $f.StartPosition = 'CenterParent'
         $f.BackColor = $C_FONDO
         $f.Font = $F_TXT
         $f.MinimizeBox = $false
         [void]$f.Controls.Add((Nuevo-Label 'Que puede hacer la app por vos' 24 16 700 30 $F_H2 $C_TXT))
-        [void]$f.Controls.Add((Nuevo-Label 'Marca lo que quieras aplicar y confirma. Si no marcas nada, no se cambia nada del equipo.' 26 46 850 20 $F_TXT $C_SUB))
+        [void]$f.Controls.Add((Nuevo-Label 'Marca lo que quieras aplicar. Abajo te muestro exactamente que va a hacer la app con cada cosa.' 26 46 870 20 $F_TXT $C_SUB))
 
-        $lista = New-Object System.Windows.Forms.CheckedListBox
-        $lista.Location = New-Object System.Drawing.Point(26, 74)
-        $lista.Size = New-Object System.Drawing.Size(850, 148)
-        $lista.CheckOnClick = $true
-        $lista.Font = $F_TXT
         $na = @($global:DrvAtipicos).Count
         $np = @($global:DrvPendientes).Count
-        if ($na -gt 0) {
-            [void]$lista.Items.Add(('Reparar ' + $na + ' controlador(es) de OTRO equipo: ' + (($global:DrvAtipicos | Select-Object -First 2 | ForEach-Object { $_.Nombre }) -join ', ')), $true)
-        } else {
-            [void]$lista.Items.Add('Reparar controladores de otro equipo (no se encontro ninguno)', $false)
-        }
-        if ($np -gt 0) { [void]$lista.Items.Add(('Instalar ' + $np + ' controlador(es) que ofrece Windows Update'), $true) }
-        else { [void]$lista.Items.Add('Buscar e instalar controladores nuevos en Windows Update', $true) }
+
+        $chkAtip = New-Object System.Windows.Forms.CheckBox
+        $chkAtip.Text = ('Reparar los controladores de OTRO equipo que se detectaron (' + $na + ')')
+        $chkAtip.Location = New-Object System.Drawing.Point(26, 74); $chkAtip.AutoSize = $true
+        if ($na -gt 0) { $chkAtip.Checked = $true } else { $chkAtip.Enabled = $false }
+        [void]$f.Controls.Add($chkAtip)
+
+        $chkWU = New-Object System.Windows.Forms.CheckBox
+        $chkWU.Text = ('Instalar los controladores que ofrece Windows Update (' + $np + ' detectados ahora)')
+        $chkWU.Location = New-Object System.Drawing.Point(26, 100); $chkWU.AutoSize = $true
+        $chkWU.Checked = $true
+        [void]$f.Controls.Add($chkWU)
+        $script:chkAtipSol = $chkAtip; $script:chkWUSol = $chkWU
+
+        [void]$f.Controls.Add((Nuevo-Label 'ESTO ES LO QUE SE VA A HACER' 26 158 500 20 $F_H2 $C_TXT))
+        $detalle = New-Object System.Windows.Forms.TextBox
+        $detalle.Multiline = $true; $detalle.ScrollBars = 'Vertical'; $detalle.WordWrap = $false
+        $detalle.ReadOnly = $true; $detalle.Font = $F_MONO
+        $detalle.Location = New-Object System.Drawing.Point(26, 182)
+        $detalle.Size = New-Object System.Drawing.Size(870, 120)
+        $detalle.BackColor = [System.Drawing.Color]::White
+        [void]$f.Controls.Add($detalle)
+        $script:txtDetSol = $detalle
 
         $chkPunto = New-Object System.Windows.Forms.CheckBox
         $chkPunto.Text = 'Crear un punto de restauracion antes de tocar los controladores (tarda alrededor de 1 minuto)'
-        $chkPunto.Location = New-Object System.Drawing.Point(26, 232); $chkPunto.AutoSize = $true
+        $chkPunto.Location = New-Object System.Drawing.Point(26, 126); $chkPunto.AutoSize = $true
         [void]$f.Controls.Add($chkPunto)
+        $script:chkPuntoSol = $chkPunto
+        $chkAtip.Add_CheckedChanged({ Actualizar-Detalle })
+        $chkWU.Add_CheckedChanged({ Actualizar-Detalle })
+        $chkPunto.Add_CheckedChanged({ Actualizar-Detalle })
 
         $btnAplicar = New-Object System.Windows.Forms.Button
         $btnAplicar.Text = 'Aplicar lo seleccionado'
         $btnAplicar.Size = New-Object System.Drawing.Size(230, 40)
-        $btnAplicar.Location = New-Object System.Drawing.Point(26, 262)
+        $btnAplicar.Location = New-Object System.Drawing.Point(26, 310)
         $btnAplicar.BackColor = $C_AZUL; $btnAplicar.ForeColor = [System.Drawing.Color]::White
         $btnAplicar.FlatStyle = 'Flat'; $btnAplicar.FlatAppearance.BorderSize = 0
         $btnAplicar.Font = $F_BTN; $btnAplicar.Cursor = 'Hand'
@@ -1714,41 +1729,88 @@ function Mostrar-GUI {
         $btnDM = New-Object System.Windows.Forms.Button
         $btnDM.Text = 'Administrador de dispositivos'
         $btnDM.Size = New-Object System.Drawing.Size(230, 40)
-        $btnDM.Location = New-Object System.Drawing.Point(268, 262)
+        $btnDM.Location = New-Object System.Drawing.Point(268, 310)
         $btnDM.FlatStyle = 'Flat'; $btnDM.Cursor = 'Hand'
         [void]$f.Controls.Add($btnDM)
 
         $btnWU = New-Object System.Windows.Forms.Button
         $btnWU.Text = 'Actualizaciones opcionales'
         $btnWU.Size = New-Object System.Drawing.Size(210, 40)
-        $btnWU.Location = New-Object System.Drawing.Point(510, 262)
+        $btnWU.Location = New-Object System.Drawing.Point(510, 310)
         $btnWU.FlatStyle = 'Flat'; $btnWU.Cursor = 'Hand'
         [void]$f.Controls.Add($btnWU)
 
         $btnPlan = New-Object System.Windows.Forms.Button
         $btnPlan.Text = 'Ver plan de acciones'
         $btnPlan.Size = New-Object System.Drawing.Size(180, 40)
-        $btnPlan.Location = New-Object System.Drawing.Point(732, 262)
+        $btnPlan.Location = New-Object System.Drawing.Point(732, 310)
         $btnPlan.FlatStyle = 'Flat'; $btnPlan.Cursor = 'Hand'
         [void]$f.Controls.Add($btnPlan)
 
+        [void]$f.Controls.Add((Nuevo-Label 'RESULTADO (aca va apareciendo lo que hace la app)' 26 362 600 20 $F_H2 $C_TXT))
         $salida = New-Object System.Windows.Forms.TextBox
         $salida.Multiline = $true; $salida.ScrollBars = 'Vertical'; $salida.WordWrap = $false
         $salida.ReadOnly = $true; $salida.Font = $F_MONO
-        $salida.Location = New-Object System.Drawing.Point(26, 314)
-        $salida.Size = New-Object System.Drawing.Size(850, 248)
+        $salida.Location = New-Object System.Drawing.Point(26, 386)
+        $salida.Size = New-Object System.Drawing.Size(870, 200)
         $salida.BackColor = [System.Drawing.Color]::White
         [void]$f.Controls.Add($salida)
         $script:txtSol = $salida
 
-        [void]$f.Controls.Add((Nuevo-Label 'Si algo no se puede instalar solo, usa estos accesos: Administrador de dispositivos, Actualizaciones opcionales o el plan de acciones.' 26 570 850 40 $F_SUB $C_SUB))
+        [void]$f.Controls.Add((Nuevo-Label 'Si algo no se puede instalar solo, usa estos accesos: Administrador de dispositivos, Actualizaciones opcionales o el plan de acciones.' 26 592 870 40 $F_SUB $C_SUB))
+        $script:lblNotaSol = $f.Controls[$f.Controls.Count - 1]
 
         $btnCerrar = New-Object System.Windows.Forms.Button
         $btnCerrar.Text = 'Cerrar'
         $btnCerrar.Size = New-Object System.Drawing.Size(150, 34)
-        $btnCerrar.Location = New-Object System.Drawing.Point(726, 612)
+        $btnCerrar.Location = New-Object System.Drawing.Point(746, 636)
         $btnCerrar.FlatStyle = 'Flat'; $btnCerrar.Cursor = 'Hand'
         [void]$f.Controls.Add($btnCerrar)
+
+        function Actualizar-Detalle {
+            # Arma el texto que muestra, en castellano claro, que va a hacer la app con cada accion marcada.
+            $na2 = @($global:DrvAtipicos).Count
+            $np2 = @($global:DrvPendientes).Count
+            $l = New-Object System.Collections.ArrayList
+            [void]$l.Add('ESTO ES LO QUE SE VA A HACER')
+            [void]$l.Add('')
+            if ($na2 -eq 0) {
+                [void]$l.Add('[ ] Reparar controladores de OTRO equipo: no se detecto ninguno en este equipo.')
+            } elseif ([bool]$script:chkAtipSol.Checked) {
+                [void]$l.Add(('[X] Reparar ' + $na2 + ' controlador(es) de OTRO equipo:'))
+                foreach ($a in @($global:DrvAtipicos)) {
+                    [void]$l.Add(('    - ' + $a.Nombre + '   (paquete ' + $a.Inf + ', proveedor ' + $a.Proveedor + ', fecha ' + $a.Fecha + ')'))
+                }
+                [void]$l.Add('    Que hace: quita ese paquete de driver y vuelve a detectar el dispositivo para que')
+                [void]$l.Add('    Windows instale el controlador estandar del fabricante.')
+                foreach ($a in (@($global:DrvAtipicos) | Where-Object { $_.Inf } | Select-Object -First 3)) {
+                    [void]$l.Add(('    Comando: pnputil /delete-driver ' + $a.Inf + ' /uninstall   y despues   pnputil /scan-devices'))
+                }
+            } else {
+                [void]$l.Add(('[ ] Reparar ' + $na2 + ' controlador(es) de OTRO equipo: NO se va a tocar nada (casilla desmarcada).'))
+            }
+            [void]$l.Add('')
+            if ([bool]$script:chkWUSol.Checked) {
+                if ($np2 -gt 0) {
+                    [void]$l.Add(('[X] Instalar los controladores de Windows Update (' + $np2 + '):'))
+                    foreach ($p in @($global:DrvPendientes)) { [void]$l.Add(('    - ' + $p.Titulo)) }
+                    [void]$l.Add('    Que hace: los descarga e instala. Puede pedir reiniciar el equipo.')
+                } else {
+                    [void]$l.Add('[X] Buscar controladores nuevos en Windows Update (no habia ninguno detectado ahora).')
+                    [void]$l.Add('    Que hace: busca y, si aparece alguno, lo descarga e instala.')
+                }
+            } else {
+                [void]$l.Add('[ ] Instalar controladores de Windows Update: NO se va a buscar ni instalar nada.')
+            }
+            [void]$l.Add('')
+            if ([bool]$script:chkPuntoSol.Checked) { [void]$l.Add('[X] Antes de aplicar: crear un punto de restauracion (puede tardar un minuto).') }
+            else { [void]$l.Add('[ ] Sin punto de restauracion previo.') }
+            [void]$l.Add('')
+            [void]$l.Add('Nada se cambia hasta que aprietes "Aplicar lo seleccionado".')
+            $script:txtDetSol.Text = ($l -join [Environment]::NewLine)
+            $script:txtDetSol.SelectionStart = 0
+            [System.Windows.Forms.Application]::DoEvents()
+        }
 
         $btnDM.Add_Click({ Start-Process 'devmgmt.msc' })
         $btnWU.Add_Click({ Start-Process 'ms-settings:windowsupdate-optionalupdates' })
@@ -1758,16 +1820,16 @@ function Mostrar-GUI {
         })
         $btnCerrar.Add_Click({ $f.Close() })
         $btnAplicar.Add_Click({
-            $sel = @()
-            for ($i = 0; $i -lt $lista.Items.Count; $i++) { if ($lista.GetItemChecked($i)) { $sel += $i } }
-            if ($sel.Count -eq 0) { [System.Windows.Forms.MessageBox]::Show('No marcaste ninguna accion.') | Out-Null; return }
+            $hacerAtip = [bool]$script:chkAtipSol.Checked
+            $hacerWU   = [bool]$script:chkWUSol.Checked
+            if (-not $hacerAtip -and -not $hacerWU) { [System.Windows.Forms.MessageBox]::Show('No hay ninguna accion marcada.') | Out-Null; return }
             $rr = [System.Windows.Forms.MessageBox]::Show('Se van a aplicar cambios en este equipo (instalar o quitar controladores). Continuar?', 'Confirmar', 'YesNo', 'Question')
             if ($rr -ne [System.Windows.Forms.DialogResult]::Yes) { return }
             $script:txtSol.Clear()
             $uiPrevio = $global:UI
             $global:UI = { param($t) if ($script:txtSol) { $script:txtSol.AppendText($t + [Environment]::NewLine); $script:txtSol.SelectionStart = $script:txtSol.TextLength; $script:txtSol.ScrollToCaret(); [System.Windows.Forms.Application]::DoEvents() } }
             try {
-                if ($chkPunto.Checked) {
+                if ([bool]$script:chkPuntoSol.Checked) {
                     $script:txtSol.AppendText('Creando punto de restauracion (puede tardar un minuto)...' + [Environment]::NewLine)
                     [System.Windows.Forms.Application]::DoEvents()
                     $rp = ''
@@ -1777,10 +1839,6 @@ function Mostrar-GUI {
                         $rp = 'creado'
                     } catch { $rp = 'no se pudo crear (' + $_.Exception.Message + ')' }
                     $script:txtSol.AppendText('Punto de restauracion: ' + $rp + [Environment]::NewLine + [Environment]::NewLine)
-                }
-                $hacerAtip = $false; $hacerWU = $false
-                foreach ($i in $sel) {
-                    if (('' + $lista.Items[$i]) -match '^Reparar') { $hacerAtip = $true } else { $hacerWU = $true }
                 }
                 if ($hacerAtip) {
                     foreach ($a in @($global:DrvAtipicos)) { foreach ($l in (Reparar-DriverAtipico $a)) { $script:txtSol.AppendText($l + [Environment]::NewLine) } }
@@ -1796,9 +1854,10 @@ function Mostrar-GUI {
             } finally {
                 $global:UI = $uiPrevio
                 $global:Bombear = $false
-                $chkPunto.Checked = $false
+                $script:chkPuntoSol.Checked = $false
             }
         })
+        Actualizar-Detalle
         if ($SoloConstruir) { $f.Dispose(); return $true }
         [void]$f.ShowDialog($form)
     }
@@ -1882,7 +1941,12 @@ function Mostrar-GUI {
         $prom = 0
         if ($n -gt 0) { $prom = [int]($ctrl / $n) }
         $solOk = 'no probado'
-        try { [void](Mostrar-Soluciones -SoloConstruir); $solOk = 'OK' } catch { $solOk = ('FALLO: ' + $_.Exception.Message) }
+        try {
+            [void](Mostrar-Soluciones -SoloConstruir)
+            $solTxt = 'sin detalle'
+            if ($script:txtDetSol) { $solTxt = ('' + $script:txtDetSol.Text.Length + ' caracteres | ' + (($script:txtDetSol.Text -split [Environment]::NewLine)[0])) }
+            $solOk = ('OK (' + $solTxt + ')')
+        } catch { $solOk = ('FALLO: ' + $_.Exception.Message) }
         $form.Dispose()
         Write-Host ('AUTOTEST GUI: tarjetas=' + $n + ' | controles por tarjeta=' + $prom + ' (esperado 6) | dialogo soluciones=' + $solOk + ' | errores capturados=' + $Error.Count + ' | estado global=' + $global:EstadoGlobal)
         $i = 0
